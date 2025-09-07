@@ -7,6 +7,7 @@ and disabled for release builds.
     }
 
     //panic!("TEST panic"); //This also works-- we get a backtrace! But the MCU restarts automatically for us.
+    //We can change that by adding CONFIG_ESP_SYSTEM_PANIC_GDBSTUB=y to sdkconfig.defaults.
 }
 
 A better approach (if you just need to conditionally complie in log messages)
@@ -28,4 +29,5 @@ fn main() {
     log::info!("Hello, world!");
 
     log::info!("x is {x}"); //This works fine.
+    panic!("TEST panic");
 }

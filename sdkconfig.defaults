@@ -8,3 +8,7 @@ CONFIG_FREERTOS_HZ=1000
 # Workaround for https://github.com/espressif/esp-idf/issues/7631
 #CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
 #CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=n
+
+#After building and flashing, when a panic occurs, the MCU will pause execution. You can then use 
+#idf-monitor and GDB to inspect registers, local variables, and memory to find the root cause of the panic. 
+CONFIG_ESP_SYSTEM_PANIC_GDBSTUB=y
