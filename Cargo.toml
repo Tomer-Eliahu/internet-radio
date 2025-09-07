@@ -2,16 +2,19 @@
 name = "internet-radio"
 version = "0.1.0"
 authors = ["Tomer Eliahu <73798700+Tomer-Eliahu@users.noreply.github.com>"]
-edition = "2021"
+edition = "2024"
 resolver = "2"
-rust-version = "1.77"
+rust-version = "1.88" # Current latest version of Xtensa Rust
 
 [[bin]]
 name = "internet-radio"
 harness = false # do not use the built in cargo test harness -> resolve rust-analyzer errors
 
 [profile.release]
-opt-level = "s"
+opt-level = "s" # My note: maybe modify (or remove). 
+# from my template maybe also add
+# codegen-units = 1 # better optimizations
+# lto = true # better optimizations
 
 [profile.dev]
 debug = true    # Symbols are nice and they don't increase the size on Flash
@@ -25,6 +28,8 @@ experimental = ["esp-idf-svc/experimental"]
 [dependencies]
 log = "0.4"
 esp-idf-svc = "0.51"
+
+#TODO: one adding Embassy, try updating the dependencies below (log and esp-idf-svc are fine)
 
 # --- Optional Embassy Integration ---
 # esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
