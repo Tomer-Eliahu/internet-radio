@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Tomer Eliahu <73798700+Tomer-Eliahu@users.noreply.github.com>"]
 edition = "2024"
 resolver = "2"
-rust-version = "1.88" # Current latest version of Xtensa Rust
+rust-version = "1.88" # Current latest version of Xtensa Rust (source: https://github.com/esp-rs/rust-build)
 
 [[bin]]
 name = "internet-radio"
@@ -28,8 +28,10 @@ experimental = ["esp-idf-svc/experimental"]
 [dependencies]
 log = "0.4"
 esp-idf-svc = "0.51"
+embedded-svc = "0.28.1"
+embedded-hal = "1.0.0"
 
-#TODO: one adding Embassy, try updating the dependencies below (log and esp-idf-svc are fine)
+#TODO: one adding Embassy, try updating the dependencies below (things above are fine)
 
 # --- Optional Embassy Integration ---
 # esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
