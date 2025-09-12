@@ -60,7 +60,7 @@ see https://docs.rs/log/latest/log/#compile-time-filters .
 //Note that if this address is wrong, then this is the right one:
 // https://esp32.com/viewtopic.php?t=28578
 // Recall some devices have a WhoAmI register ( To check if the device is addressed correctly,
-//read its device ID and print the value.)
+//read its device ID and print the value. --this one does not though)
 //######## JUST use the I2C driver as shown below (it implements the I2C trait of embedded hal) ############
 
 //Note that pin gpio17 in Rust corresponds the pin named IO17 in the ESP docs (which might be connected
@@ -116,9 +116,10 @@ fn main() -> ! {
     log::info!("x is {x}"); //This works fine.
 
     let adc1 = peripherals.adc1;
+    let adc_pin = peripherals.pins.gpio5;
 
     loop {
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(100)); //replace with call to diagonose in buttons
     }
 }
 
@@ -241,7 +242,7 @@ pub mod led {
 /// Each button press creates a different, distinct voltage level that can be read by the microcontroller's ADC pin.
 /// The microcontroller measures the analog voltage and compares it to a predefined range of values (like the mid points
 /// in voltage between each 2 buttons).
-///Each range  then corresponds to a specific button.
+///Each range then corresponds to a specific button.
 /// For example, a reading between 0.0V and 0.5V could mean Button 1, while 1.0V to 1.5V means Button 2, and so on.
 ///
 /// The con of this is that
@@ -253,50 +254,50 @@ pub mod led {
 /// it can "bounce," creating multiple fast, spurious electrical signals. You must implement software debouncing
 /// (e.g., waiting a few milliseconds and re-reading the pin state) to ensure a single press is registered.
 ///
-/// We want to record the voltage on the Pin whenver the interrupt is generated
-///and then do either urgent work (change the station; stop and play),
-///or end the ISR and do non-urgent work (adjust volume).
+/// We want to record the voltage on the Pin whenver the interrupt is generated.
+//(change the station; stop and play, adjust the volume),
 ///
+/// 
+/// 
+///
+/// It seems like the best way to do this is use 
+/// continous ADC driver (which is super efficent as it uses DMA), and a monotior (a software thing)
+/// on it to see if it devaites above/below the threasholds we set, if it does-- it generates an interrupt!
+/// See https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/adc_continuous.html#monitor
+/// 
 /// the esp std book used notifications, which only give the latest value, so if the interrupt is triggered multiple
 ///times before the value of the notification is read, you will only be able to read the latest one.
 ///Queues, on the other hand, allow receiving multiple values. See esp_idf_hal::task::queue::Queue for more details
+/// 
+/// 
+/// CRITICAL: Debouncing and noise filtering must also be handled in your code, 
+/// as this is not provided by the hardware or esp-idf-hal in Rust.
+/// You can use multisampling (Take multiple ADC readings in quick succession and average them. 
+/// This reduces the impact of random noise on any single reading 
+/// and provides a more stable value for button detection)
+/// 
+/// isn't multi sampling done for me when using adc continuous mode?
 ///
+/// Not automatically. 
+/// ADC continuous mode streams samples via DMA; 
+/// it doesn’t average them for you unless you explicitly enable a filter/averager.
+/// ESP32-S3’s continuous driver supports an optional IIR filter you can enable 
+/// with adc_continuous_iir_filter_enable(); otherwise you receive raw samples 
+/// and must perform your own multisampling/averaging in software. [ADC configs]
+/// Espressif recommends multisampling (averaging multiple samples) to mitigate noise, but this is guidance, 
+/// not an automatic behavior of continuous mode. [Minimize noise]
 /// 
-/// **IMPORTANT Note:**
-/// Since we use this for an internet radio, it makes the most sense to prioritze audio stuff,
-/// and put pulling the state of buttons in a lower prioirty (Embassy) task (maybe just equal priority task is fine;
-/// can either deal with the impact of the button presses directly in that task or update global atomics to 
-/// indicate change which needs to be considered for the audio task).
-/// We pull the state of the buttons, and then we await for a time. That way
-/// we go lower power when we can (the embassy exector does this for us), but we also get "debouncing" for free. 
+/// If you need an interrupt on “any button press,” you can use the continuous-mode monitor 
+/// with high/low thresholds for event generation, and still do your own averaging (**or enable the IIR filter**) 
+/// to identify which button was pressed reliably. [Monitor; ADC configs]
+/// please read this whole page (in this answer all the links were to this page):
+/// https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/adc/adc_continuous.html#analog-to-digital-converter-adc-continuous-mode-driver
 /// 
-/// 
-/// Another way: 
-/// The hybrid interrupt approach
-/// The most effective method is to use a digital interrupt on the ADC pin to detect any button press, 
-/// then immediately take an ADC reading, but NOT in the Interrupt Service Routine (ISR), 
-/// to differentiate which button was pressed.
-/// 
-/// (VERIFY THIS FALLING EDGE THING)
-///Falling Edge Interrupt: Configure the button's GPIO pin with an internal pull-up 
-/// and an external interrupt set to trigger on a FALLING edge. 
-/// Pressing any button in the resistor ladder will pull the pin's voltage down from HIGH, triggering the interrupt.
-///ISR Task Notification: Inside the ISR, 
-/// instead of performing the ADC read directly, use a task notification (or queue) 
-/// to alert a higher-priority FreeRTOS task. 
-/// ISRs should be as short as possible and not perform blocking operations like ADC conversions.
-///Dedicated Button Task: 
-/// A dedicated task receives the notification and then reads the ADC to determine the specific voltage level. 
-/// This approach ensures that the main program loop remains responsive 
-/// while offloading the button handling to a separate task. 
-/// 
-/// These might be helpful: 
-/// https://github.com/esp-rs/std-training/blob/main/advanced/button-interrupt/examples/solution_led.rs
-/// https://github.com/esp-rs/esp-idf-hal/blob/master/examples/button_interrupt.rs
 /// 
 pub mod buttons {
 
-    //TODO: add a function configuring Gpio5 pin as an interrupt (we want an interrupt on a button press)
+    //TODO: Continous adc mode, enable the filter in that (and/or do multisampling to reduce noise),
+    //Make sure to implement debouncing as well.
 
     use std::thread;
     use std::time::Duration;
@@ -325,7 +326,7 @@ pub mod buttons {
         loop {
             // you can change the sleep duration depending on how often you want to sample
             thread::sleep(Duration::from_millis(100));
-            //adc.read should not be called in ISR context. It returns the voltage of the pin.
+            //adc.read should *NOT* be called in ISR context. It returns the voltage of the pin.
             log::info!("ADC value: {}", adc.read(&mut adc_pin).unwrap());
         }
     }
