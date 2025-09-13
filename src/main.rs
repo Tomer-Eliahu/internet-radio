@@ -16,8 +16,8 @@ use esp_idf_svc::{
         i2c::{I2cConfig, I2cDriver},
         io::EspIOError,
         prelude::{Peripherals, *},
+        task::notification::Notification,
         task::queue::Queue,
-        task::notification::Notification
     },
     http::client::{Configuration, EspHttpConnection},
     sys::esp_random, //generate a random number (if needed)
@@ -27,7 +27,7 @@ use esp_idf_svc::{
 #[allow(unused)]
 use embedded_hal::{delay::DelayNs, digital::OutputPin};
 
-use crate::led::LedDriver;
+use crate::{buttons::diagonse, led::LedDriver};
 
 /*debug_assertions is by default Enabled for non-release builds
 and disabled for release builds.
@@ -99,13 +99,25 @@ fn main() -> ! {
     let sda = peripherals.pins.gpio17; //serial data line
     let scl = peripherals.pins.gpio18; //serial clock line
     let i2c = peripherals.i2c0;
-    let config = I2cConfig::new().baudrate(led::BAUDRATE_STANDARD.into()); //Todo: attempt putting this at fast
+    //IMPORTANT NOTE -- if need bus sharing, remember there are things in the hal for that
+    //(if I can't make using i2c1 work).
+
+
+    //CRITICAL NOTE:
+    //I have no idea why but if you put the LCD screen on where it is supposed to rest,
+    //the I2C times out. Literally, restarting the *same* program via the terminal (CTRL + R),
+    //if the screen hangs off and down over the buttons (so the silver back of the screen covers the
+    //buttons), it works, if the screen rests where it is supposed to, it does not.
+
+    //So for this project, make sure you disconnect the LCD screen from the Korvo.
+
+    let config = I2cConfig::new().baudrate(led::BAUDRATE_FAST.into());
+    //for trouble shooting, maybe enable the following line
+    //config =config.scl_enable_pullup(true).sda_enable_pullup(true).timeout(Duration::from_millis(20).into());
     let i2c = I2cDriver::new(i2c, sda, scl, &config).unwrap();
     let mut led_driver = LedDriver::build(i2c);
-    //Todo: flash this and see the LEDs turn on.
-    //Also make sure when resetting the device via reset button that the LEDs go back off.
-    //if this fails, try driving the PERI_PWR_ON pin on the IO expander to turn it off and on again.
-    //Actually from the schematics, this pin powers a test point.
+
+    led_driver.flip_led(led::LEDs::Blue);
 
     let mut x = 7;
     let y = 35;
@@ -118,8 +130,11 @@ fn main() -> ! {
     let adc1 = peripherals.adc1;
     let adc_pin = peripherals.pins.gpio5;
 
+    //Add call to diagnose here which never returns
+    diagonse(adc1, adc_pin);
+
     loop {
-        std::thread::sleep(Duration::from_millis(100)); //replace with call to diagonose in buttons
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -127,7 +142,8 @@ fn main() -> ! {
 /// We therefore write a partial I2C driver for this device so we can easily work the LEDs.
 ///
 /// Note that the device is reset to its default state by cycling the power supply and causing a power-on reset
-/// (from the data sheet).
+/// (from the data sheet). This means that once we flash a new program *and* cycle th power off then back on,
+/// we can see the device has reverted to its default state.
 pub mod led {
     use embedded_hal::i2c::I2c;
     use esp_idf_svc::hal::prelude::*;
@@ -166,9 +182,9 @@ pub mod led {
     pub struct LedDriver<I2C> {
         i2c: I2C,
 
-        //tracking the state of the leds in this sturct saves us having to read IO expander registers.
-        red_led_on: bool,
-        blue_led_on: bool,
+        //Caching the state of the output port register is a convenience for flipping the LEDs.
+        //It saves us having to actually read it from the IO expander to know the state of the LEDs.
+        output_value: u8,
     }
 
     impl<I2C: I2c> LedDriver<I2C> {
@@ -178,7 +194,7 @@ pub mod led {
         /// the I2C Address (of this io expander)：0'b 0111 000x .
         /// This address is specified in the **right-aligned** form as specified
         /// [here](https://docs.rs/embedded-hal/latest/src/embedded_hal/i2c.rs.html#296).
-        /// 
+        ///
         /// [Korvo schematic]: https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf
         const ADDR: u8 = 0b00111000;
 
@@ -189,48 +205,65 @@ pub mod led {
         /// Push-pull design structure.
         const BLUE_LED_PIN_ON: u8 = 0b1_0000000;
 
+        ///The default value of the output port on power up.
+        const DEFAULT_OUTPUT: u8 = 0b11111111;
+
         ///The byte in each register is of the form: P7 P6 P5 P4 P3 P2 P1 P0 (MSB -> LSB).
         /// So to clear P6 and P7 in the configuration register (sets the LEDs as output)
         /// we need to write this byte
         const SET_LEDS_OUTPUT: u8 = 0b00111111;
 
         ///Creates and initializes the LED driver.
-        pub fn build(i2c: I2C) -> Self {
-            let mut driver = Self {
-                i2c,
-                red_led_on: false,
-                blue_led_on: false,
-            };
-            driver
-                .init()
-                .expect("Setting LEDs as output should not fail");
-            driver
-        }
-
-        ///At power on, the IO expander device has all pins being inputs.
-        /// We set the LED pins as outputs.
-        /// We do this by clearing the relevant bits from the Configuration register (which starts with all bits set).
-        fn init(&mut self) -> Result<(), I2C::Error> {
-            self.i2c.write(
+        pub fn build(mut i2c: I2C) -> Self {
+            //At power on, the IO expander device has all pins being inputs.
+            // We set the LED pins as outputs.
+            // We do this by clearing the relevant bits from the
+            //Configuration register (which starts with all bits set).
+            i2c.write(
                 Self::ADDR,
                 &[Register::Configuration as u8, Self::SET_LEDS_OUTPUT],
-            )?;
+            )
+            .expect("Setting LEDs as output should not fail");
 
-            //Once we enable the LEDs pins as outputs, their default values will turn them on.
-            self.red_led_on = true;
-            self.blue_led_on = true;
-            Ok(())
+            //Once we enable the LEDs pins as outputs, their default values on power-up will turn them on.
+            //So we turn them off here.
+            //This also ensures that after a reset (but not a power cycle), 
+            //we would be in a consistent state.
+
+            let mut driver  = Self {
+                i2c,
+                output_value: Self::DEFAULT_OUTPUT,
+            };
+
+            driver.flip_led(LEDs::Red);
+            driver.flip_led(LEDs::Blue);
+
+            driver
+
         }
 
+        ///Turn the led of choice on or off.
         pub fn flip_led(&mut self, led: LEDs) {
             match led {
-                LEDs::Red => todo!(),
-                LEDs::Blue => todo!(),
+                LEDs::Red => {
+                    self.output_value ^= Self::RED_LED_PIN_ON;
+                }
+                LEDs::Blue => {
+                    self.output_value ^= Self::BLUE_LED_PIN_ON;
+                }
             }
+
+            self.i2c
+                .write(Self::ADDR, &[Register::OutputPort as u8, self.output_value])
+                .expect("Flipping the LEDs should not fail");
         }
 
+        ///Returns (is_Red_led_on, is_Blue_led_on)
         pub fn get_led_states(&self) -> (bool, bool) {
-            (self.red_led_on, self.blue_led_on)
+            (
+                (self.output_value & Self::RED_LED_PIN_ON) != 0,
+                (self.output_value & Self::BLUE_LED_PIN_ON) != 0,
+            )
         }
     }
 }
@@ -257,43 +290,43 @@ pub mod led {
 /// We want to record the voltage on the Pin whenver the interrupt is generated.
 //(change the station; stop and play, adjust the volume),
 ///
-/// 
-/// 
 ///
-/// It seems like the best way to do this is use 
+///
+///
+/// It seems like the best way to do this is use
 /// continous ADC driver (which is super efficent as it uses DMA), and a monotior (a software thing)
 /// on it to see if it devaites above/below the threasholds we set, if it does-- it generates an interrupt!
 /// See https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/adc_continuous.html#monitor
-/// 
+///
 /// the esp std book used notifications, which only give the latest value, so if the interrupt is triggered multiple
 ///times before the value of the notification is read, you will only be able to read the latest one.
 ///Queues, on the other hand, allow receiving multiple values. See esp_idf_hal::task::queue::Queue for more details
-/// 
-/// 
-/// CRITICAL: Debouncing and noise filtering must also be handled in your code, 
+///
+///
+/// CRITICAL: Debouncing and noise filtering must also be handled in your code,
 /// as this is not provided by the hardware or esp-idf-hal in Rust.
-/// You can use multisampling (Take multiple ADC readings in quick succession and average them. 
-/// This reduces the impact of random noise on any single reading 
+/// You can use multisampling (Take multiple ADC readings in quick succession and average them.
+/// This reduces the impact of random noise on any single reading
 /// and provides a more stable value for button detection)
-/// 
+///
 /// isn't multi sampling done for me when using adc continuous mode?
 ///
-/// Not automatically. 
-/// ADC continuous mode streams samples via DMA; 
+/// Not automatically.
+/// ADC continuous mode streams samples via DMA;
 /// it doesn’t average them for you unless you explicitly enable a filter/averager.
-/// ESP32-S3’s continuous driver supports an optional IIR filter you can enable 
-/// with adc_continuous_iir_filter_enable(); otherwise you receive raw samples 
+/// ESP32-S3’s continuous driver supports an optional IIR filter you can enable
+/// with adc_continuous_iir_filter_enable(); otherwise you receive raw samples
 /// and must perform your own multisampling/averaging in software. [ADC configs]
-/// Espressif recommends multisampling (averaging multiple samples) to mitigate noise, but this is guidance, 
+/// Espressif recommends multisampling (averaging multiple samples) to mitigate noise, but this is guidance,
 /// not an automatic behavior of continuous mode. [Minimize noise]
-/// 
-/// If you need an interrupt on “any button press,” you can use the continuous-mode monitor 
-/// with high/low thresholds for event generation, and still do your own averaging (**or enable the IIR filter**) 
+///
+/// If you need an interrupt on “any button press,” you can use the continuous-mode monitor
+/// with high/low thresholds for event generation, and still do your own averaging (**or enable the IIR filter**)
 /// to identify which button was pressed reliably. [Monitor; ADC configs]
 /// please read this whole page (in this answer all the links were to this page):
 /// https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/adc/adc_continuous.html#analog-to-digital-converter-adc-continuous-mode-driver
-/// 
-/// 
+///
+///
 pub mod buttons {
 
     //TODO: Continous adc mode, enable the filter in that (and/or do multisampling to reduce noise),
@@ -303,14 +336,36 @@ pub mod buttons {
     use std::time::Duration;
 
     use esp_idf_svc::hal::{
-        adc::{attenuation::DB_11, oneshot::{config::AdcChannelConfig, *}, ADC1}, gpio::Gpio5, 
+        adc::{
+            ADC1,
+            attenuation::DB_11,
+            oneshot::{config::AdcChannelConfig, *},
+        },
+        gpio::Gpio5,
     };
-    
-    ///Note that ADC2 is also used by the Wifi ([source]), so we use ADC1.
-    /// 
-    ///[source]: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/adc_oneshot.html#hardware-limitations. 
-    pub fn diagonse(adc1: ADC1, gpio_pin: Gpio5) -> ! {
 
+    ///Note that ADC2 is also used by the Wifi ([source]), so we use ADC1.
+    ///
+    ///[source]: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/adc_oneshot.html#hardware-limitations.
+    ///
+    ///[schematic]: https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf
+    ///
+    /// Values I got from calling diagonse (these are different than the board [schematic]):
+    ///                 
+    /// No button presss: 3100
+    ///                 
+    /// Vol + about 320
+    ///                 
+    /// Vol - about 720
+    ///                 
+    /// Set about 990
+    ///                 
+    /// Play about 1500
+    ///                 
+    /// Mute about 1810
+    ///                 
+    /// Rec about 2210
+    pub fn diagonse(adc1: ADC1, gpio_pin: Gpio5) -> ! {
         let adc = AdcDriver::new(adc1).unwrap();
 
         // configuring pin to analog read, you can regulate the adc input voltage range depending on your need
@@ -320,8 +375,7 @@ pub mod buttons {
             ..Default::default()
         };
 
-        let mut adc_pin = 
-        AdcChannelDriver::new(&adc, gpio_pin, &config).unwrap();
+        let mut adc_pin = AdcChannelDriver::new(&adc, gpio_pin, &config).unwrap();
 
         loop {
             // you can change the sleep duration depending on how often you want to sample
