@@ -287,16 +287,8 @@ pub mod led {
 /// it can "bounce," creating multiple fast, spurious electrical signals. You must implement software debouncing
 /// (e.g., waiting a few milliseconds and re-reading the pin state) to ensure a single press is registered.
 ///
-/// We want to record the voltage on the Pin whenver the interrupt is generated.
-//(change the station; stop and play, adjust the volume),
+/// We want to record the voltage on the Pin (change the station; stop and play, adjust the volume).
 ///
-///
-///
-///
-/// It seems like the best way to do this is use
-/// continous ADC driver (which is super efficent as it uses DMA), and a monotior (a software thing)
-/// on it to see if it devaites above/below the threasholds we set, if it does-- it generates an interrupt!
-/// See https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/adc_continuous.html#monitor
 ///
 /// the esp std book used notifications, which only give the latest value, so if the interrupt is triggered multiple
 ///times before the value of the notification is read, you will only be able to read the latest one.
@@ -309,28 +301,19 @@ pub mod led {
 /// This reduces the impact of random noise on any single reading
 /// and provides a more stable value for button detection)
 ///
-/// isn't multi sampling done for me when using adc continuous mode?
-///
-/// Not automatically.
-/// ADC continuous mode streams samples via DMA;
-/// it doesn’t average them for you unless you explicitly enable a filter/averager.
-/// ESP32-S3’s continuous driver supports an optional IIR filter you can enable
-/// with adc_continuous_iir_filter_enable(); otherwise you receive raw samples
-/// and must perform your own multisampling/averaging in software. [ADC configs]
-/// Espressif recommends multisampling (averaging multiple samples) to mitigate noise, but this is guidance,
-/// not an automatic behavior of continuous mode. [Minimize noise]
-///
-/// If you need an interrupt on “any button press,” you can use the continuous-mode monitor
-/// with high/low thresholds for event generation, and still do your own averaging (**or enable the IIR filter**)
-/// to identify which button was pressed reliably. [Monitor; ADC configs]
-/// please read this whole page (in this answer all the links were to this page):
-/// https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/adc/adc_continuous.html#analog-to-digital-converter-adc-continuous-mode-driver
-///
-///
+/// Polling: we will periodically measure the adc input pin in (for instance) an embassy task.
+/// Or set up a timer interrupt every 100ms.
+///This is the simplest way (we also get debouncing for "free" here). 
+/// It also is power efficent as we can go low power for the rest of the time 
+/// (the embassy exector goes low power for us automatically when the mcu has nothing to do).
+/// **[This is Espressif's approach to their own button component](https://docs.espressif.com/projects/esp-iot-solution/en/latest/input_device/button.html)**.
+/// **Final decision: I decided to go with this approach!!**.
 pub mod buttons {
 
-    //TODO: Continous adc mode, enable the filter in that (and/or do multisampling to reduce noise),
-    //Make sure to implement debouncing as well.
+    //If going embassy polling approach:
+    //MAYBE By taking multiple readings a few milliseconds apart, 
+    //your polling routine can confirm a stable button press.
+    //I.E. use multisampling. This is what espressif does as well (with adc one shot mode)
 
     use std::thread;
     use std::time::Duration;
