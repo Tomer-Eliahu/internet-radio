@@ -27,11 +27,35 @@ experimental = ["esp-idf-svc/experimental"]
 
 [dependencies]
 log = "0.4"
-esp-idf-svc = "0.51"
 embedded-svc = "0.28.1"
 embedded-hal = "1.0.0"
 
-#TODO: one adding Embassy, try updating the dependencies below (things above are fine)
+
+# Note: for me using embassy-time-driver here + embassy-time crate never worked.
+# Luckily, with Embassy we can provide our time instead. So we use the EspTaskTimerService instead.
+# So we are only using Embasssy for the exector + some utils.
+esp-idf-svc = { version = "0.51", features = ["embassy-sync", "critical-section"] }
+
+embassy-executor = { version = "0.9.1", features = ["executor-thread", "arch-std",] }
+
+embassy-sync = { version = "0.7.2" }
+embassy-futures = "0.1.2"
+
+
+embedded-hal-async = "1.0.0"
+embedded-io-async = "0.6.1"
+embedded-io = "0.6.1"
+
+
+# ---------------------------------------------------------------------------------------------
+
+#esp-idf-svc = { version = "0.51", features = ["embassy-time-driver", "embassy-sync"] }
+#critical-section = { version = "1.2", features = ["std"], default-features = false }
+# embassy-time = { version = "0.5" }
+
+
+# static_cell = "2.1.1"
+
 
 # --- Optional Embassy Integration ---
 # esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
@@ -49,6 +73,9 @@ embedded-hal = "1.0.0"
 # --- Temporary workaround for embassy-executor < 0.8 ---
 # esp-idf-svc = { version = "0.51", features = ["embassy-time-driver", "embassy-sync"] }
 # critical-section = { version = "1.1", features = ["std"], default-features = false }
+
+# ---------------------------------------------------------------------------------------------
+
 
 [build-dependencies]
 embuild = "0.33"

@@ -22,10 +22,11 @@ use esp_idf_svc::{
     http::client::{Configuration, EspHttpConnection},
     sys::esp_random, //generate a random number (if needed)
     wifi::{AsyncWifi, EspWifi},
+    timer::EspTaskTimerService
 };
 
-#[allow(unused)]
-use embedded_hal::{delay::DelayNs, digital::OutputPin};
+
+//use embedded_hal::{digital::OutputPin};
 
 use crate::{buttons::diagonse, led::LedDriver};
 
@@ -86,13 +87,32 @@ see https://docs.rs/log/latest/log/#compile-time-filters .
 
 */
 
-fn main() -> ! {
+
+/*From the Embassy website
+
+No busy-loop polling: CPU sleeps when there’s no work to do, using WFI.
+
+from: https://docs.embassy.dev/embassy-executor/git/cortex-m/index.html#embassy-executor
+
+**NOT TRUE FOR STD**
+
+*/
+
+use embassy_executor::{Executor, Spawner};
+use embedded_hal_async::delay::DelayNs;
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) -> ! {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
+    
 
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
+
+    let timer_service= EspTaskTimerService::new().unwrap();
+    let mut async_timer = timer_service.timer_async().unwrap();
 
     let peripherals = Peripherals::take().unwrap();
 
@@ -115,7 +135,7 @@ fn main() -> ! {
     //for trouble shooting, maybe enable the following line
     //config =config.scl_enable_pullup(true).sda_enable_pullup(true).timeout(Duration::from_millis(20).into());
     let i2c = I2cDriver::new(i2c, sda, scl, &config).unwrap();
-    let mut led_driver = LedDriver::build(i2c);
+    let mut led_driver: LedDriver<I2cDriver<'_>> = LedDriver::build(i2c);
 
     led_driver.flip_led(led::LEDs::Blue);
 
@@ -130,6 +150,11 @@ fn main() -> ! {
     let adc1 = peripherals.adc1;
     let adc_pin = peripherals.pins.gpio5;
 
+    loop {
+        led_driver.flip_led(led::LEDs::Blue);
+        async_timer.delay_ms(500).await;
+    }
+
     //Add call to diagnose here which never returns
     diagonse(adc1, adc_pin);
 
@@ -137,6 +162,24 @@ fn main() -> ! {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
+
+
+// let executor = Executor::new();
+
+// executor.run(|spawner| {
+//     spawner.spawn(run(led_driver));
+// });
+    
+// #[embassy_executor::task]
+// async fn run(led_driver: LedDriver<I2cDriver<'_>>) {
+//     loop {
+//         led_driver.flip_led(led::LEDs::Blue);
+//         Timer::after_millis(500).await;
+//     }
+// }
+
+
+
 
 ///The LEDs are on the IO expander peripheral: [the TCA9554A](https://www.ti.com/product/TCA9554A).
 /// We therefore write a partial I2C driver for this device so we can easily work the LEDs.
@@ -287,7 +330,9 @@ pub mod led {
 /// it can "bounce," creating multiple fast, spurious electrical signals. You must implement software debouncing
 /// (e.g., waiting a few milliseconds and re-reading the pin state) to ensure a single press is registered.
 ///
-/// We want to record the voltage on the Pin (change the station; stop and play, adjust the volume).
+/// We want to record the voltage on the Pin (change the station: 
+/// use SET for station back and REC for station foward; stop (Mute key) and Play, 
+/// adjust the volume: Vol+ and Vol-).
 ///
 ///
 /// the esp std book used notifications, which only give the latest value, so if the interrupt is triggered multiple
@@ -302,7 +347,8 @@ pub mod led {
 /// and provides a more stable value for button detection)
 ///
 /// Polling: we will periodically measure the adc input pin in (for instance) an embassy task.
-/// Or set up a timer interrupt every 100ms.
+/// Or set up a timer interrupt to fire every 100ms or so to update a global atomic, to tell the main function
+/// it is time to poll the pin again.
 ///This is the simplest way (we also get debouncing for "free" here). 
 /// It also is power efficent as we can go low power for the rest of the time 
 /// (the embassy exector goes low power for us automatically when the mcu has nothing to do).
@@ -352,7 +398,7 @@ pub mod buttons {
         let adc = AdcDriver::new(adc1).unwrap();
 
         // configuring pin to analog read, you can regulate the adc input voltage range depending on your need
-        // we use the attenuation of 11db which sets the input voltage range to around 0-3.1V
+        // we use the attenuation of 11db which sets the input voltage range to around 0-3.1V on the esp32-S3.
         let config = AdcChannelConfig {
             attenuation: DB_11,
             ..Default::default()
