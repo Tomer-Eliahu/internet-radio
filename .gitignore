@@ -2,4 +2,6 @@
 /.embuild
 /target
 /Cargo.lock
+#keep your wifi info private!
+src/wifi/config.rs 
 private.md

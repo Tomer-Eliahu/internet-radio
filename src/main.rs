@@ -23,6 +23,8 @@ use esp_idf_svc::{
     sys::esp_random, //generate a random number (if needed)
     wifi::{AsyncWifi, EspWifi},
     timer::EspTaskTimerService
+    //Alternative Timer approach if needed
+    //https://github.com/esp-rs/esp-idf-hal/blob/master/examples/blinky_async.rs
 };
 
 
@@ -98,8 +100,12 @@ from: https://docs.embassy.dev/embassy-executor/git/cortex-m/index.html#embassy-
 
 */
 
-use embassy_executor::{Executor, Spawner};
+use embassy_executor::Spawner;
 use embedded_hal_async::delay::DelayNs;
+use  embassy_futures::select::select;
+
+const STATION_URLS: [&'static str;1] = ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3"];
+
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
@@ -149,9 +155,33 @@ async fn main(_spawner: Spawner) -> ! {
 
     let adc1 = peripherals.adc1;
     let adc_pin = peripherals.pins.gpio5;
+    
+    
+    let modem= peripherals.modem;
+    //let mut client = wifi::setup_wifi(modem).await.unwrap();
+    //let _ = wifi::test_get_request(&mut client);
 
+    let blink_while_setting_wifi = async { 
+        loop {
+            led_driver.flip_led(led::LEDs::Blue);
+            async_timer.delay_ms(500).await;
+        }
+
+    };
+
+    //TODO: Use concurrently while searching for connection
+    let mut client = match select(blink_while_setting_wifi,  wifi::setup_wifi(modem)).await
+    {
+        embassy_futures::select::Either::First(_) => unreachable!(),
+        embassy_futures::select::Either::Second(res) => {res.unwrap()},
+    };
+
+    let _ = wifi::test_get_request(&mut client);
+
+    log::info!("Wifi should be set up. Blue should stop blinking");
+    
     loop {
-        led_driver.flip_led(led::LEDs::Blue);
+        led_driver.flip_led(led::LEDs::Red);
         async_timer.delay_ms(500).await;
     }
 
@@ -413,4 +443,188 @@ pub mod buttons {
             log::info!("ADC value: {}", adc.read(&mut adc_pin).unwrap());
         }
     }
+}
+
+
+
+pub mod wifi {
+
+    use embedded_svc::{
+        http::{client::Client as HttpClient, Method},
+        io::{Read, Write},
+        //utils::io,
+        wifi::{AuthMethod, ClientConfiguration, Configuration},
+        
+    };
+
+    use esp_idf_svc::{
+        eventloop::EspSystemEventLoop, http::client::{Configuration as HttpConfiguration, EspHttpConnection}, 
+        io::{self, utils::try_read_full}, 
+        nvs::EspDefaultNvsPartition, sys::EspError, 
+        timer::EspTaskTimerService, wifi::{AsyncWifi, EspWifi}
+    };
+
+    pub mod config;
+
+    static WIFI: std::sync::Mutex<Option<AsyncWifi<EspWifi<'static>>>> = std::sync::Mutex::new(None);
+
+    pub async fn setup_wifi(modem: esp_idf_svc::hal::modem::Modem) -> Result<HttpClient<EspHttpConnection>, EspError>
+    {
+        let sys_loop = EspSystemEventLoop::take()?;
+        let nvs = EspDefaultNvsPartition::take()?;
+        let timer_service = EspTaskTimerService::new()?;
+
+        let mut wifi: AsyncWifi<EspWifi<'_>> = AsyncWifi::wrap(
+            EspWifi::new(modem, sys_loop.clone(), Some(nvs))?,
+            sys_loop,
+            timer_service
+        )?;
+
+        let wifi_configuration: Configuration = Configuration::Client(ClientConfiguration {
+            ssid: config::WIFI_NAME.try_into().unwrap(),
+            bssid: None,
+            auth_method: AuthMethod::WPA2Personal,
+            password: config::WIFI_PASSWORD.try_into().unwrap(),
+            channel: None,
+            ..Default::default()
+        });
+
+        wifi.set_configuration(&wifi_configuration)?;
+
+        wifi.start().await?;
+        log::info!("Wifi started");
+
+        wifi.connect().await?;
+        log::info!("Wifi connected");
+
+        wifi.wait_netif_up().await?;
+        log::info!("Wifi network interface up");
+
+        //We need to hold on to wifi (once it is dropped, it terminates).
+        {
+            *WIFI.lock().unwrap() = Some(wifi);
+        }
+        
+
+
+        // Create HTTP client
+        //
+        // Note: To send a request to an HTTPS server, you can do:        
+        let config = &HttpConfiguration {
+            crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
+            use_global_ca_store: true,
+            ..Default::default()
+        };
+        
+        let client = HttpClient::wrap(
+            EspHttpConnection::new(&config)?);
+        
+
+
+        Ok(client)
+    }
+
+    //TODO REWRITE THE STUFF BELOW
+    /// Test sending an HTTP GET request.
+    pub fn test_get_request(client: &mut HttpClient<EspHttpConnection>) -> Result<(), io::EspIOError> {
+        // Prepare headers and URL
+        let headers = [("accept", "text/plain")];
+        let url = "http://ifconfig.net/";
+
+        // Send request
+        //
+        // Note: If you don't want to pass in any headers, you can also use `client.get(url, headers)`.
+        let request = client.request(Method::Get, url, &headers)?;
+        log::info!("-> GET {url}");
+        let mut response = request.submit()?;
+
+        // Process response
+        let status = response.status();
+        log::info!("<- {status}");
+        let mut buf = [0u8; 1024];
+
+        //Note there is an async version of try_read_full
+        let bytes_read = try_read_full(&mut response, &mut buf)
+        .map_err(|e| e.0)?;
+    
+        log::info!("Read {bytes_read} bytes");
+        match std::str::from_utf8(&buf[0..bytes_read]) {
+        Ok(body_string) => log::info!(
+                "Response body (truncated to {} bytes): {:?}",
+                buf.len(),
+                body_string
+            ),
+            Err(e) => log::error!("Error decoding response body: {e}"),
+        };
+
+        Ok(())
+    }
+
+    //from esp-std book
+    //     fn get(url: impl AsRef<str>) -> Result<()> {
+    //     // 1. Create a new EspHttpClient. (Check documentation)
+    //     // ANCHOR: connection
+    //     let connection = EspHttpConnection::new(&Configuration {
+    //         use_global_ca_store: true,
+    //         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
+    //         ..Default::default()
+    //     })?;
+    //     // ANCHOR_END: connection
+    //     let mut client = Client::wrap(connection);
+
+    //     // 2. Open a GET request to `url`
+    //     let headers = [("accept", "text/plain")];
+    //     let request = client.request(Method::Get, url.as_ref(), &headers)?;
+
+    //     // 3. Submit write request and check the status code of the response.
+    //     // Successful http status codes are in the 200..=299 range.
+    //     let response = request.submit()?;
+    //     let status = response.status();
+
+    //     println!("Response code: {}\n", status);
+
+    //     match status {
+    //         200..=299 => {
+    //             // 4. if the status is OK, read response data chunk by chunk into a buffer and print it until done
+    //             //
+    //             // NB. see http_client.rs for an explanation of the offset mechanism for handling chunks that are
+    //             // split in the middle of valid UTF-8 sequences. This case is encountered a lot with the given
+    //             // example URL.
+    //             let mut buf = [0_u8; 256];
+    //             let mut offset = 0;
+    //             let mut total = 0;
+    //             let mut reader = response;
+    //             loop {
+    //                 if let Ok(size) = Read::read(&mut reader, &mut buf[offset..]) {
+    //                     if size == 0 {
+    //                         break;
+    //                     }
+    //                     total += size;
+    //                     // 5. try converting the bytes into a Rust (UTF-8) string and print it
+    //                     let size_plus_offset = size + offset;
+    //                     match str::from_utf8(&buf[..size_plus_offset]) {
+    //                         Ok(text) => {
+    //                             print!("{}", text);
+    //                             offset = 0;
+    //                         }
+    //                         Err(error) => {
+    //                             let valid_up_to = error.valid_up_to();
+    //                             unsafe {
+    //                                 print!("{}", str::from_utf8_unchecked(&buf[..valid_up_to]));
+    //                             }
+    //                             buf.copy_within(valid_up_to.., 0);
+    //                             offset = size_plus_offset - valid_up_to;
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //             println!("Total: {} bytes", total);
+    //         }
+    //         _ => bail!("Unexpected response code: {}", status),
+    //     }
+
+    //     Ok(())
+    // }
+
+
 }
