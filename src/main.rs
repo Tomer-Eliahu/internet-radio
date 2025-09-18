@@ -6,6 +6,7 @@ use embedded_svc::{
     io::{Read, Write},
 };
 
+use esp_idf_svc::hal::i2s::I2sDriver;
 //Note esp_idf_svc re-exports esp_idf_hal so we can just use that hal from here.
 #[allow(unused)]
 use esp_idf_svc::{
@@ -128,12 +129,19 @@ async fn main(_spawner: Spawner) -> ! {
     //IMPORTANT NOTE -- if need bus sharing, remember there are things in the hal for that
     //(if I can't make using i2c1 work).
 
+    /* from https://docs.rs/embedded-hal/latest/embedded_hal/i2c/index.html:
+    The embedded-hal-bus crate provides several implementations for sharing I2C buses. 
+    You can use them to take an exclusive instance you’ve received from a HAL 
+    and “split” it into multiple shared ones, 
+    to instantiate several drivers on the same bus. */
+
 
     //CRITICAL NOTE:
     //I have no idea why but if you put the LCD screen on where it is supposed to rest,
     //the I2C times out. Literally, restarting the *same* program via the terminal (CTRL + R),
     //if the screen hangs off and down over the buttons (so the silver back of the screen covers the
     //buttons), it works, if the screen rests where it is supposed to, it does not.
+    //Maybe if the LCD is connected and you are using esp-idf, then that I2C is reserved?
 
     //So for this project, make sure you disconnect the LCD screen from the Korvo.
 
@@ -155,7 +163,9 @@ async fn main(_spawner: Spawner) -> ! {
 
     let adc1 = peripherals.adc1;
     let adc_pin = peripherals.pins.gpio5;
-    
+
+    let sound  = peripherals.i2s0;//Todo look into this from docs and more.
+    //let i2s = I2sDriver::new_std_bidir()
     
     let modem= peripherals.modem;
     //let mut client = wifi::setup_wifi(modem).await.unwrap();
@@ -176,9 +186,16 @@ async fn main(_spawner: Spawner) -> ! {
         embassy_futures::select::Either::Second(res) => {res.unwrap()},
     };
 
-    let _ = wifi::test_get_request(&mut client);
+    let _ = wifi::test_get_request(&mut client).expect("Test should not fail");
 
     log::info!("Wifi should be set up. Blue should stop blinking");
+
+    //As the Blue light could have been off at this time we switch it on if need be.
+    match led_driver.get_led_states() {
+        (_, false) => led_driver.flip_led(led::LEDs::Blue),
+        _ => ()
+    };
+
     
     loop {
         led_driver.flip_led(led::LEDs::Red);
@@ -187,6 +204,10 @@ async fn main(_spawner: Spawner) -> ! {
 
     //Add call to diagnose here which never returns
     diagonse(adc1, adc_pin);
+
+    //Can Join futures where one of them detects button presses in a loop
+    //So it is impl Future<Output =!> . If we need to change to change the station we break out the loop.
+    //and make a new get request
 
     loop {
         std::thread::sleep(Duration::from_millis(100));
@@ -471,6 +492,7 @@ pub mod wifi {
     pub async fn setup_wifi(modem: esp_idf_svc::hal::modem::Modem) -> Result<HttpClient<EspHttpConnection>, EspError>
     {
         let sys_loop = EspSystemEventLoop::take()?;
+        //TODO: nvs is optional. We could just use None in EspWifi::new. Maybe change to that!
         let nvs = EspDefaultNvsPartition::take()?;
         let timer_service = EspTaskTimerService::new()?;
 
@@ -543,7 +565,16 @@ pub mod wifi {
         log::info!("<- {status}");
         let mut buf = [0u8; 1024];
 
-        //Note there is an async version of try_read_full
+        //Note there is an async version of try_read_full.
+        //Use the async version for the actual stream (see how try_read_full is implemented; I can 
+        //make my own async version). Note I think you just repeatedly call read and new data is coming in.
+        //COULD DO A double buffer approach, fill in some inital buffer, one it is full fill in the second buffer,
+        //meanwhile read only from the first buffer and repeat.
+        //Increase the buffer size when the buffer you are writing to is full and the swap to read
+        //from it has not happend yet. So use 2 VecDeques (its dynamic).
+        //Use channels or globals to pass around the buffers?
+
+        //This try_read_full calls an underlying function which Reads data from http stream.
         let bytes_read = try_read_full(&mut response, &mut buf)
         .map_err(|e| e.0)?;
     
@@ -625,6 +656,120 @@ pub mod wifi {
 
     //     Ok(())
     // }
+
+
+}
+
+
+
+
+///The board has an ES8311 low-power mono audio codec chip.
+/// The data sheet is available [here](https://www.lcsc.com/datasheet/C962342.pdf).
+/// There is a lot more information in the 
+/// [user guide](https://files.waveshare.com/wiki/common/ES8311.user.Guide.pdf).
+/// 
+/// We can completely configure this device using I2C.
+/// 
+/// Here is some of the relevant information:
+/// 
+///* DAC: 24-bit, 8 to 96 kHz sampling frequency.
+/// 
+///* The analog output path includes mono DAC, programmable volume control, 
+/// a fully differential output and headphone amplifier.
+/// The mono audio DAC supports sampling rates from 8 kHz to 96 kHz and includes 
+/// programmable digital filtering and DynamicRange Compression in the DAC path (from the user guide).
+///     
+///* Ideally we want the device to work in its default clock mode (where we supply
+/// LRCK (Left/Right data alignment clock) and SCL (Bit clock for synchronisation)). 
+/// This mode sets our MCU as the "master" for the I2S.
+/// 
+///* I2S capable of up to 24 bits.
+/// 
+///* The device can work in 2 speed modes: 
+///     - Single Speed (Fs normally range from 8 kHz to 48 kHz).
+///     - Double Speed (Fs normally range from 64 kHz to 96 kHz).
+/// 
+///* We can increase/decrease volume and even mute using this device.
+/// 
+///* The DAC is also capable of DSP/PCM mode serial audio data format instead of I2S. 
+/// With this mode we can use 32-bit depth (but there is no *audible* benefit of using that).
+pub mod speaker {
+
+    //I think you can control the volume by controlling the PA (a seperate thing)?
+    //ESP_IO48 is connected to PA_CTRL (from Korvo schematics).
+    //PA data sheet: https://www.alldatasheet.com/html-pdf/1131841/ETC1/NS4150/929/8/NS4150.html
+    //PA_CTRL (simple High or Low setting; H: Open mode (i.e on), L: Shutdown, i.e off) 
+    //is power down control terminal.
+    //It used to make power consumption more efficent (draw lower power when on standby).
+    //So we want to drive this pin High before use, and drive it low post use 
+    //(maybe have driving it low be a part of a drop implementation).
+
+
+    
+    //For the codec (ES8311), our MCU pins we are interested in are ([source]):
+    //IO16 = I2S0_MCLK (Master Clock) (this is actually not relevant for us)
+
+    //We need to supply the following:
+    //IO9=  I2S0_SCLK
+    //IO45= I2S0_LRCK
+    //IO8= I2S0_DSDIN
+
+    //These I2C pins (note that they might also be used to talk to different devices, so we might need bus sharing)
+    //IO17= I2C_SDA
+    //IO18= I2C_CLK
+    //
+    //[source]: https://docs.espressif.com/projects/esp-adf/en/latest/design-guide/dev-boards/user-guide-esp32-s3-korvo-2.html#pin-allocation-summary
+
+
+
+    use embedded_hal::i2c::I2c;
+    use esp_idf_svc::hal::prelude::*;
+
+    ///Baudrate Max clock frequency in KHz.
+    pub const BAUDRATE: KiloHertz = KiloHertz(400);
+    
+    ///The I2C address is a seven-bit chip address. 
+    ///The chip address must be 0011 00y, where y equals CE.
+    ///From the [Korvo schematic], CE is 0 for us (it is just connected to Ground).
+    ///So the 7-bit chip address is 0011 000.
+    /// 
+    /// 
+    /// This address is specified in the **right-aligned** form as specified
+    /// [here](https://docs.rs/embedded-hal/latest/src/embedded_hal/i2c.rs.html#296).
+    ///
+    /// [Korvo schematic]: https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf 
+    pub const ADDR: u8 = 0b00011_000;
+
+
+    ///Register
+    #[non_exhaustive]
+    pub enum Register {
+        ///bit 6 set to 1 mutes. Set to 0 (default) is unmute.
+        /// The other default values mean 24 bit I2S, Left channel to DAC.
+        /// See page 12 of the user guide for more info.
+        SDP_IN = 0x09,
+
+        //We *might* need to write a 1 to bit 7 only to power this codec on
+        //This register has default value: 0001 1111
+        Reset = 0
+
+        
+    }
+
+    impl Register {
+
+        ///Returns the default value of the entire register
+        const fn default(&self) -> u8 {
+            match *self 
+            {
+                Register::SDP_IN => 0,
+
+                _ => {unreachable!()}
+            }
+        }
+    }
+
+
 
 
 }
