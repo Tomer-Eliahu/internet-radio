@@ -164,8 +164,15 @@ async fn main(_spawner: Spawner) -> ! {
     let adc1 = peripherals.adc1;
     let adc_pin = peripherals.pins.gpio5;
 
-    let sound  = peripherals.i2s0;//Todo look into this from docs and more.
-    //let i2s = I2sDriver::new_std_bidir()
+
+    /*CRITICAL NOTE:
+    TODO:
+    Confirm that your I2S master (e.g., an ESP32 or other microcontroller) 
+    is configured to output the necessary clock signals (BCLK and LRCK) at the correct rates.
+    
+    */
+    let sound  = peripherals.i2s0;//TODO: look into this from docs and more.
+    //let i2s = I2sDriver::new_std_tx(i2s, config, bclk, dout, mclk, ws)
     
     let modem= peripherals.modem;
     //let mut client = wifi::setup_wifi(modem).await.unwrap();
@@ -295,7 +302,7 @@ pub mod led {
         ///This is called P6 for the Korvo. On the IO expander it is pin 11.
         /// Push-pull design structure.
         const RED_LED_PIN_ON: u8 = 0b01_000000;
-        ///This is called P7 for the Korvo. On the IO expander it is pin 11.
+        ///This is called P7 for the Korvo. On the IO expander it is pin 12.
         /// Push-pull design structure.
         const BLUE_LED_PIN_ON: u8 = 0b1_0000000;
 
@@ -665,6 +672,9 @@ pub mod wifi {
 
 ///The board has an ES8311 low-power mono audio codec chip.
 /// The data sheet is available [here](https://www.lcsc.com/datasheet/C962342.pdf).
+///
+/// The extended data sheet (this includes register descriptions) is available 
+/// [here](https://www.lcdwiki.com/res/PublicFile/ES8311_DS.pdf).
 /// There is a lot more information in the 
 /// [user guide](https://files.waveshare.com/wiki/common/ES8311.user.Guide.pdf).
 /// 
@@ -677,7 +687,7 @@ pub mod wifi {
 ///* The analog output path includes mono DAC, programmable volume control, 
 /// a fully differential output and headphone amplifier.
 /// The mono audio DAC supports sampling rates from 8 kHz to 96 kHz and includes 
-/// programmable digital filtering and DynamicRange Compression in the DAC path (from the user guide).
+/// programmable digital filtering and Dynamic Range Compression in the DAC path (from the user guide).
 ///     
 ///* Ideally we want the device to work in its default clock mode (where we supply
 /// LRCK (Left/Right data alignment clock) and SCL (Bit clock for synchronisation)). 
@@ -689,14 +699,37 @@ pub mod wifi {
 ///     - Single Speed (Fs normally range from 8 kHz to 48 kHz).
 ///     - Double Speed (Fs normally range from 64 kHz to 96 kHz).
 /// 
+///**Note: (only applicable to master mode; not the mode we will be using)** 
+/// The DAC only works in single speed mode.
+/// the ratio between internal DAC clock and LRCK must be equal or greater than 256, 
+/// and this ratio must be integral multiple of sixteen.
+/// 
 ///* We can increase/decrease volume and even mute using this device.
 /// 
 ///* The DAC is also capable of DSP/PCM mode serial audio data format instead of I2S. 
 /// With this mode we can use 32-bit depth (but there is no *audible* benefit of using that).
+/// 
+///* We can enable Dynamic Range Control (a.k.a. Dynamic Range Compression) feature of the DAC, 
+/// but since we are using it to listen to music here,
+/// we will leave it at its default setting of disabled.
+/// 
+///* The DAC has an equalizer, but we are not going to use it (it is bypassed by default).
+/// 
+///* ES8311 has an internal power-on reset.
+/// 
+///* From the user guide: 
+/// It is suggested that releasing a software reset operation to clear the internal state while codec power up. 
+/// The following is proposal procedure of software reset operation: 
+/// set the reset bits to ‘1’ to release reset signal and clear CSM_ON to ‘0’ to powerdown state machine, 
+/// then delay a short time, such as several milliseconds, clear reset bits to ‘0’ and set CMS_ON to ‘1’ at last. 
+/// Please set all reset bits (bits 0-4 inclusive) to ‘1’ and clear CSM_ON to ‘0’ (for us simply return the register to its
+/// default value!)
+/// to minimize the power consumption when codec is ready for standby or sleep.
 pub mod speaker {
 
-    //I think you can control the volume by controlling the PA (a seperate thing)?
+ 
     //ESP_IO48 is connected to PA_CTRL (from Korvo schematics).
+    //IMPORTANT: we must use this to power up this power amplifier!
     //PA data sheet: https://www.alldatasheet.com/html-pdf/1131841/ETC1/NS4150/929/8/NS4150.html
     //PA_CTRL (simple High or Low setting; H: Open mode (i.e on), L: Shutdown, i.e off) 
     //is power down control terminal.
@@ -705,9 +738,12 @@ pub mod speaker {
     //(maybe have driving it low be a part of a drop implementation).
 
 
-    
+
     //For the codec (ES8311), our MCU pins we are interested in are ([source]):
-    //IO16 = I2S0_MCLK (Master Clock) (this is actually not relevant for us)
+    //IO16 = I2S0_MCLK (Master Clock) (this is actually not relevant for us; maybe it is-- give it as a reference
+    //in addition to the 2 clock lines below? is this required? it seems it is needed from the following statement:
+    //" In slave mode, LRCK divider is inactive and ES8311 will detect MCLK/LRCK ratio automatically").
+    //We need to make sure MCLK and LRCK are synced???
 
     //We need to supply the following:
     //IO9=  I2S0_SCLK
@@ -727,6 +763,7 @@ pub mod speaker {
 
     ///Baudrate Max clock frequency in KHz.
     pub const BAUDRATE: KiloHertz = KiloHertz(400);
+    pub const BAUDRATE_SLOW: KiloHertz = KiloHertz(100);
     
     ///The I2C address is a seven-bit chip address. 
     ///The chip address must be 0011 00y, where y equals CE.
@@ -741,18 +778,72 @@ pub mod speaker {
     pub const ADDR: u8 = 0b00011_000;
 
 
-    ///Register
+    ///Registers (just the ones we need).
+    /// 
+    /// **Important**: bits are numbered starting from 0.
     #[non_exhaustive]
     pub enum Register {
+        ///Serial Digital Port In
         ///bit 6 set to 1 mutes. Set to 0 (default) is unmute.
         /// The other default values mean 24 bit I2S, Left channel to DAC.
         /// See page 12 of the user guide for more info.
-        SDP_IN = 0x09,
+        /// While this mute function should work, there is a cleaner way to do this, that does not result
+        /// in artifact sounds.
+        //SdpIn = 0x09,
 
         //We *might* need to write a 1 to bit 7 only to power this codec on
-        //This register has default value: 0001 1111
-        Reset = 0
+        //This register has default value: 0001 1111.
+        //CSM_ON must be set to ‘1’ to start up state machine in normal mode, so we do need to flip that bit.
+        //I think we also need to set that bit back to 0 on power down (drop impl of this driver?)
+        //See pages 17-18 of the user guide for more info.
+        Reset = 0,
 
+        ///Clock Manager.
+        /// Need to set bit 4 to 1 to turn on Bit Clock (ACTUALLY: I think this not needed in slave mode;
+        /// just in master mode where this pin is output instead of input).
+        /// default value of register = 0
+        //ClockManager = 0x01,
+
+        ///Power Management. See page 18 in the user guide for more info.
+        /// TODO: I think we need to enable at least DAC reference circuits here?
+        /// C stuff just writes 0x1 to here (enables everything an startups VMID in normal mode).
+        /// default 0b1111_1100.
+        SysPwrMgt = 0x0D,
+
+        //default 0000 0010 . The C code writes 0 to this (does *not* enable internal reference DAC circuit)
+        ///This register enables and disables the DAC. It has a default value of 0000 0010 (DAC powered down 
+        /// and internal reference circuits for DAC disabled).
+        /// We want to write 0000 0001 into this to power up the DAC and enable the reference circuits.
+        SysEnableDac = 0x12,
+
+        ///The C code writes 0x10 i.e. 16 into this to enable heaphone drive.
+        /// Has default 0100 0000. 
+        /// We want to set bit 4 to 1 (has default 0), to enable output to HP (or speaker) drive.
+        SysEnableSpeakerDrive = 0x13,
+
+
+        ///Write 1 to bits 5 to 7 inclusive to cleanly mute the DAC (according to the user guide page 29).
+        /// Has default value of 0.
+        DacMute = 0x31,
+
+        ///DAC_VOLUME is an 8-bit digital volume control for DAC 
+        /// with range from -95.5dB to +32dB in 0.5dB/step resolution.
+        ///used to control DAC volume. 
+        /// Default value of 0 which is -95.dB. Max value 0xFF which corresponds to +32dB.
+        DacVol = 0x32,
+
+        ///READ ONLY. Should have a value of 0x83.
+        ChipID1 = 0xFD,
+
+        ///READ ONLY. Should have a value of 0x11.
+        ChipID2 = 0xFE,
+
+        //es8311_write_reg(codec, ES8311_DAC_REG37 (this is 0x37: DAC equalizer), 0x08). 
+        //This is C stuff when starting the codec 
+        //(it is disabling the equlizer which is already disabled by default); 
+
+        //In C, they adjust the default of register 0x10 to set  bits 2 and 3 to 1 as well
+        //(highest bias level). The rest of the register they keep the same as the default.
         
     }
 
@@ -762,12 +853,16 @@ pub mod speaker {
         const fn default(&self) -> u8 {
             match *self 
             {
-                Register::SDP_IN => 0,
+                //Register::SdpIn => 0,
+                Register::Reset => 0b0001_1111,
+                Register::SysPwrMgt => 0b1111_1100,
 
                 _ => {unreachable!()}
             }
         }
     }
+
+    //TODO: implement the software reset procedure as detailed in the the User guide (also quoted above)
 
 
 
