@@ -122,6 +122,7 @@ async fn main(_spawner: Spawner) -> ! {
     let mut async_timer = timer_service.timer_async().unwrap();
 
     let peripherals = Peripherals::take().unwrap();
+    
 
     let sda = peripherals.pins.gpio17; //serial data line
     let scl = peripherals.pins.gpio18; //serial clock line
@@ -172,7 +173,10 @@ async fn main(_spawner: Spawner) -> ! {
     
     */
     let sound  = peripherals.i2s0;//TODO: look into this from docs and more.
-    //let i2s = I2sDriver::new_std_tx(i2s, config, bclk, dout, mclk, ws)
+    //Set mclk to None I think (should not be needed). ws is word select which is LRCK.
+    //let i2s= I2sDriver::new_std_tx(i2s, config, bclk, dout, mclk, ws);
+    
+    let pa_ctrl= peripherals.pins.gpio48;
     
     let modem= peripherals.modem;
     //let mut client = wifi::setup_wifi(modem).await.unwrap();
@@ -280,7 +284,7 @@ pub mod led {
         Blue,
     }
 
-    pub struct LedDriver<I2C> {
+    pub struct LedDriver<I2C: I2c> {
         i2c: I2C,
 
         //Caching the state of the output port register is a convenience for flipping the LEDs.
@@ -716,26 +720,18 @@ pub mod wifi {
 ///* The DAC has an equalizer, but we are not going to use it (it is bypassed by default).
 /// 
 ///* ES8311 has an internal power-on reset.
-/// 
-///* From the user guide: 
-/// It is suggested that releasing a software reset operation to clear the internal state while codec power up. 
-/// The following is proposal procedure of software reset operation: 
-/// set the reset bits to ‘1’ to release reset signal and clear CSM_ON to ‘0’ to powerdown state machine, 
-/// then delay a short time, such as several milliseconds, clear reset bits to ‘0’ and set CMS_ON to ‘1’ at last. 
-/// Please set all reset bits (bits 0-4 inclusive) to ‘1’ and clear CSM_ON to ‘0’ (for us simply return the register to its
-/// default value!)
-/// to minimize the power consumption when codec is ready for standby or sleep.
+///
 pub mod speaker {
 
  
-    //ESP_IO48 is connected to PA_CTRL (from Korvo schematics).
-    //IMPORTANT: we must use this to power up this power amplifier!
-    //PA data sheet: https://www.alldatasheet.com/html-pdf/1131841/ETC1/NS4150/929/8/NS4150.html
-    //PA_CTRL (simple High or Low setting; H: Open mode (i.e on), L: Shutdown, i.e off) 
-    //is power down control terminal.
-    //It used to make power consumption more efficent (draw lower power when on standby).
-    //So we want to drive this pin High before use, and drive it low post use 
-    //(maybe have driving it low be a part of a drop implementation).
+    //!ESP_IO48 is connected to PA_CTRL (from Korvo schematics).
+    //!IMPORTANT: we must use this to power up this power amplifier!
+    //![PA data sheet](https://www.alldatasheet.com/html-pdf/1131841/ETC1/NS4150/929/8/NS4150.html).
+    //!PA_CTRL (simple High or Low setting; H: Open mode (i.e on), L: Shutdown, i.e off) 
+    //!is power down control terminal.
+    //!It used to make power consumption more efficent (draw lower power when on standby).
+    //!So we want to drive this pin High before use, and drive it low post use 
+    //!(maybe have driving it low be a part of a drop implementation).
 
 
 
@@ -758,54 +754,203 @@ pub mod speaker {
 
 
 
-    use embedded_hal::i2c::I2c;
-    use esp_idf_svc::hal::prelude::*;
+    use std::time::Duration;
 
-    ///Baudrate Max clock frequency in KHz.
+    use embedded_hal::i2c::I2c;
+    
+    
+    use esp_idf_svc::hal::{gpio::{Gpio48, PinDriver}, prelude::*};
+
+    ///I2C Baudrate Max clock frequency in KHz.
     pub const BAUDRATE: KiloHertz = KiloHertz(400);
     pub const BAUDRATE_SLOW: KiloHertz = KiloHertz(100);
+
+    pub struct Volume(u8);
+
+    impl TryFrom<u8> for Volume {
+        type Error = &'static str;
+        
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            if value <= 100 {
+                Ok(Volume(value))
+            }
+            else {
+                Err("Volume only accepts 0<= integral values <=100")
+            }
+        }
+
+    }
     
-    ///The I2C address is a seven-bit chip address. 
-    ///The chip address must be 0011 00y, where y equals CE.
-    ///From the [Korvo schematic], CE is 0 for us (it is just connected to Ground).
-    ///So the 7-bit chip address is 0011 000.
-    /// 
-    /// 
-    /// This address is specified in the **right-aligned** form as specified
-    /// [here](https://docs.rs/embedded-hal/latest/src/embedded_hal/i2c.rs.html#296).
-    ///
-    /// [Korvo schematic]: https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf 
-    pub const ADDR: u8 = 0b00011_000;
+
+   
+    pub struct SpeakerDriver<I2C: I2c>  {
+        i2c: I2C,
+        ///TODO: Note this type has async methods, use them!
+        i2s: esp_idf_svc::hal::i2s::I2sDriver<'static, esp_idf_svc::hal::i2s::I2sTx>,
+        pa_ctrl_pin: PinDriver<'static, Gpio48, esp_idf_svc::hal::gpio::Output>,
+        vol: Volume
+    }
+
+    impl<I2C: I2c> SpeakerDriver<I2C>
+    {  
+        ///The I2C address is a seven-bit chip address. 
+        ///The chip address must be 0011 00y, where y equals CE.
+        ///From the [Korvo schematic], CE is 0 for us (it is just connected to Ground).
+        ///So the 7-bit chip address is 0011 000.
+        /// 
+        /// 
+        /// This address is specified in the **right-aligned** form as specified
+        /// [here](https://docs.rs/embedded-hal/latest/src/embedded_hal/i2c.rs.html#296).
+        ///
+        /// [Korvo schematic]: https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf 
+        pub const I2C_ADDR: u8 = 0b00011_000;
+
+
+        ///Creates and initlizes the Speaker Driver.
+        /// This function initilizes the codec and also turns on the power amplifier (PA).
+        pub fn build(i2c: I2C, i2s: esp_idf_svc::hal::i2s::I2sDriver<'static, esp_idf_svc::hal::i2s::I2sTx>, 
+        pa_ctrl_pin: Gpio48) -> Self {
+
+            let pa_ctrl_pin = PinDriver::output(pa_ctrl_pin).unwrap();
+            let mut speaker_driver = Self{ i2c, i2s, pa_ctrl_pin, vol: Volume(0) };
+            
+            speaker_driver.codec_software_reset();
+
+            //For Debug builds, verify this device is indeed the codec.
+            #[cfg(debug_assertions)]
+            {
+                let mut read_buf: [u8; 1] = [0];
+
+                speaker_driver.i2c.write_read(Self::I2C_ADDR, 
+                    &[Register::ChipID1 as u8], read_buf.as_mut()).unwrap();
+                
+                assert_eq!(read_buf[0], Register::ChipID1.default(), "MISTAKEN IDENTITY");
+
+                speaker_driver.i2c.write_read(Self::I2C_ADDR, 
+                    &[Register::ChipID2 as u8], read_buf.as_mut()).unwrap();
+
+                assert_eq!(read_buf[0], Register::ChipID2.default(), "MISTAKEN IDENTITY");
+
+            }
+
+            //We power up everything except ADC stuff
+            speaker_driver.i2c.write(Self::I2C_ADDR, 
+                &[Register::SysPwrMgt as u8 , 0b00110101]).unwrap();
+
+            //Power up DAC
+            speaker_driver.i2c.write(Self::I2C_ADDR, 
+                &[Register::SysEnableDac as u8 , 0]).unwrap();
+            
+            //Enable speaker drive
+            let write_in = const {Register::SysEnableSpeakerDrive.default() | (1<<4)};
+            
+            speaker_driver.i2c.write(Self::I2C_ADDR, 
+                &[Register::SysEnableSpeakerDrive as u8 , write_in]).unwrap();
+
+            
+            //Power up the power amplifier
+            speaker_driver.pa_ctrl_pin.set_high().unwrap();
+
+            //set the volume to 80% as an initial value
+            speaker_driver.set_vol(Volume::try_from(80).unwrap());
+
+            
+            //The speaker driver is all set!
+            speaker_driver
+        }
+
+
+
+        /// From the [user guide]: 
+        /// It is suggested that releasing a software reset operation to clear 
+        /// the internal state while codec power up. 
+        /// The following is proposal procedure of software reset operation: 
+        /// set the reset bits to ‘1’ to release reset signal and clear CSM_ON to ‘0’ to powerdown state machine, 
+        /// then delay a short time, such as several milliseconds, clear reset bits to ‘0’ 
+        /// and set CMS_ON to ‘1’ at last.
+        ///  
+        /// Please set all reset bits (bits 0-4 inclusive) to ‘1’ 
+        /// and clear CSM_ON to ‘0’ (for us simply return the register to its default value!)
+        /// to minimize the power consumption when codec is ready for standby or sleep (We do this in 
+        /// the drop implementation).
+        /// 
+        ///[user guide]: https://files.waveshare.com/wiki/common/ES8311.user.Guide.pdf
+        fn codec_software_reset(&mut self) {
+           
+            //reset everything and power down
+            self.i2c.write(Self::I2C_ADDR, &[Register::Reset as u8, Register::Reset.default()]).unwrap();
+            
+            std::thread::sleep(Duration::from_millis(100));
+
+            //no reset and power up
+            self.i2c.write(Self::I2C_ADDR, &[Register::Reset as u8, (1 << 7)]).unwrap();
+
+        }
+
+
+        pub fn mute(&mut self) {
+
+            self.i2c.write(Self::I2C_ADDR, 
+                &[Register::DacMute as u8, 0b1110_0000]).unwrap();
+
+        }
+
+        pub fn unmute(&mut self) {
+
+            self.i2c.write(Self::I2C_ADDR, 
+                &[Register::DacMute as u8, 0]).unwrap();
+
+        }
+
+        ///Sets the volume. Takes an integral precentage of volume desired.
+        pub fn set_vol(&mut self, vol: Volume) {
+
+            //the min is 0 which corresponds to -95.5dB 
+            let max: f32 = 191.0; //191 = 0xBF which corresponds to 0dB
+            
+            let desired = (max * ((vol.0 as f32)/100.0)) as u8;
+
+            self.i2c.write(Self::I2C_ADDR,
+                &[Register::DacVol as u8, desired]).unwrap();
+            
+
+            self.vol = vol;
+
+        }
+    }
+
+    impl<I2C> Drop for SpeakerDriver<I2C>
+    where I2C: I2c
+    {
+        fn drop(&mut self) {
+
+            //reset everything and power down. Minimizes power consumption.
+            self.i2c.write(Self::I2C_ADDR, 
+                &[Register::Reset as u8, Register::Reset.default()]).unwrap();
+
+            //Power down the PA.
+            self.pa_ctrl_pin.set_low().unwrap();
+
+        }
+    }
 
 
     ///Registers (just the ones we need).
     /// 
     /// **Important**: bits are numbered starting from 0.
     #[non_exhaustive]
-    pub enum Register {
-        ///Serial Digital Port In
-        ///bit 6 set to 1 mutes. Set to 0 (default) is unmute.
-        /// The other default values mean 24 bit I2S, Left channel to DAC.
-        /// See page 12 of the user guide for more info.
-        /// While this mute function should work, there is a cleaner way to do this, that does not result
-        /// in artifact sounds.
-        //SdpIn = 0x09,
+    enum Register {
 
-        //We *might* need to write a 1 to bit 7 only to power this codec on
-        //This register has default value: 0001 1111.
-        //CSM_ON must be set to ‘1’ to start up state machine in normal mode, so we do need to flip that bit.
-        //I think we also need to set that bit back to 0 on power down (drop impl of this driver?)
-        //See pages 17-18 of the user guide for more info.
+        ///The Reset register.
+        ///This register has default value: 0001 1111.
+        /// 
+        ///CSM_ON (bit 7) must be set to ‘1’ to start up state machine in normal mode (i.e turn on this codec), 
+        /// so we need to flip that bit.
+        ///See page 18 of the user guide for more info (we follow the power up and power down procedure
+        /// suggested there).
         Reset = 0,
 
-        ///Clock Manager.
-        /// Need to set bit 4 to 1 to turn on Bit Clock (ACTUALLY: I think this not needed in slave mode;
-        /// just in master mode where this pin is output instead of input).
-        /// default value of register = 0
-        //ClockManager = 0x01,
-
         ///Power Management. See page 18 in the user guide for more info.
-        /// TODO: I think we need to enable at least DAC reference circuits here?
         /// C stuff just writes 0x1 to here (enables everything an startups VMID in normal mode).
         /// default 0b1111_1100.
         SysPwrMgt = 0x0D,
@@ -813,7 +958,7 @@ pub mod speaker {
         //default 0000 0010 . The C code writes 0 to this (does *not* enable internal reference DAC circuit)
         ///This register enables and disables the DAC. It has a default value of 0000 0010 (DAC powered down 
         /// and internal reference circuits for DAC disabled).
-        /// We want to write 0000 0001 into this to power up the DAC and enable the reference circuits.
+        /// We want to write 0 into this to power up the DAC.
         SysEnableDac = 0x12,
 
         ///The C code writes 0x10 i.e. 16 into this to enable heaphone drive.
@@ -829,7 +974,7 @@ pub mod speaker {
         ///DAC_VOLUME is an 8-bit digital volume control for DAC 
         /// with range from -95.5dB to +32dB in 0.5dB/step resolution.
         ///used to control DAC volume. 
-        /// Default value of 0 which is -95.dB. Max value 0xFF which corresponds to +32dB.
+        /// Default value of 0 which is -95.5dB. Max value 0xFF which corresponds to +32dB.
         DacVol = 0x32,
 
         ///READ ONLY. Should have a value of 0x83.
@@ -838,13 +983,33 @@ pub mod speaker {
         ///READ ONLY. Should have a value of 0x11.
         ChipID2 = 0xFE,
 
+        //-----------Maybe add--------------
+        //In C, they adjust the default of register 0x10 to set  bits 2 and 3 to 1 as well
+        //(highest bias level). The rest of the register they keep the same as the default.
+
+
+
         //es8311_write_reg(codec, ES8311_DAC_REG37 (this is 0x37: DAC equalizer), 0x08). 
         //This is C stuff when starting the codec 
         //(it is disabling the equlizer which is already disabled by default); 
 
-        //In C, they adjust the default of register 0x10 to set  bits 2 and 3 to 1 as well
-        //(highest bias level). The rest of the register they keep the same as the default.
-        
+
+        //----- Currently not needed----------------
+
+        //Serial Digital Port In
+        //bit 6 set to 1 mutes. Set to 0 (default) is unmute.
+        // The other default values mean 24 bit I2S, Left channel to DAC.
+        // See page 12 of the user guide for more info.
+        // While this mute function should work, there is a cleaner way to do this, that does not result
+        // in artifact sounds.
+        //SdpIn = 0x09, NOT NEEDED
+
+        //Clock Manager.
+        // Need to set bit 4 to 1 to turn on Bit Clock (ACTUALLY: I am fairly sure this not needed in slave mode;
+        // just in master mode where this pin is output instead of input).
+        // default value of register = 0
+        //ClockManager = 0x01,
+
     }
 
     impl Register {
@@ -853,18 +1018,16 @@ pub mod speaker {
         const fn default(&self) -> u8 {
             match *self 
             {
-                //Register::SdpIn => 0,
                 Register::Reset => 0b0001_1111,
                 Register::SysPwrMgt => 0b1111_1100,
-
-                _ => {unreachable!()}
+                Register::SysEnableDac => 0b0000_0010,
+                Register::SysEnableSpeakerDrive => 0b0100_0000,
+                Register::DacMute | Register::DacVol => 0,
+                Register::ChipID1 => 0x83,
+                Register::ChipID2 => 0x11,
             }
         }
     }
-
-    //TODO: implement the software reset procedure as detailed in the the User guide (also quoted above)
-
-
 
 
 }
