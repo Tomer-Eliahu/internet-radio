@@ -107,7 +107,6 @@ use  embassy_futures::select::select;
 
 const STATION_URLS: [&'static str;1] = ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3"];
 
-use std::io::Cursor;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
@@ -221,79 +220,42 @@ async fn main(_spawner: Spawner) -> ! {
     //Start streaming audio from the station
     //For STATION_URL[0] we get around 3.66 kb per 200ms 
     //start with 1 second buffer
+
     //TODO: maybe change this to a different type? Make this a dynamic buffer?
-    let mut buf = [0u8; 1024 * 4 * 5];
+    //let mut buf = [0u8; 1024 * 4 * 5];
     
     {
 
         // Send request
-
-        //On my computer the Get is 
-        // GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */*  
-        //For HTTP 1.1 (what we use), if we just did a GET request with no headers then that is equivalent
-        //to this
+        //This GET request is equivalent to GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */* 
         let request = client.get( STATION_URLS[0]).unwrap();
         log::info!("-> GET {}", STATION_URLS[0]);
         let mut response = request.submit().unwrap();
 
         // Process response
         let status = response.status();
-        log::info!("<- {status}");
+        //TODO: actually check if status is valid, and if not add retries? or just straight up panic?
+        log::info!("Status is: {status}");
+
+        let stream_source = audio_stream::new_stream(response);
+      
         
-
-        //TODO:
-        //Note there is an async version of try_read_full.
-        //Use the async version for the actual stream (see how try_read_full is implemented; I can 
-        //make my own async version). Note I think you just repeatedly call read and new data is coming in.
-        //COULD DO A double buffer approach, fill in some inital buffer, one it is full fill in the second buffer,
-        //meanwhile read only from the first buffer and repeat.
-        //Increase the buffer size when the buffer you are writing to is full and the swap to read
-        //from it has not happend yet. So use 2 VecDeques (its dynamic).
-        //Use channels or globals to pass around the buffers?
-
-        //So I could write an async version that fills up a VecDequque for 200ms on startup
-        //by calling read in a loop in an async block with select.
-        //We could do something like this maybe:
-
-        //         use std::collections::VecDeque;
-
-        // let deq1 = VecDeque::from([1, 2, 3, 4]);
-        // let deq2: VecDeque<_> = [1, 2, 3, 4].into();
-
-        //This try_read_full calls an underlying function which Reads data from http stream.
-        //So we read chunks the size of buf.len().
-        //While an async version of this function exists, the necessary traits to call it
-        //are not implemented on any type so we can't use it.
-        
-        let bytes_read = try_read_full(&mut response, &mut buf)
-        .map_err(|e| log::error!("Error reading bytes: {}", e.0)).unwrap();
-    
-        log::info!("Read {bytes_read} bytes");
-
-        //We want to pass all bytes read to decoder.
-        //Cursor implements Symphonia's MediaSource trait which is needed for decoding.
-        //Could also have used this instead of cursor:
-        // https://docs.rs/symphonia-core/0.5.4/symphonia_core/io/struct.ReadOnlySource.html 
-        let to_decoder = Cursor::new(&mut buf[0..bytes_read]);
-        
-
-        //CRITICAL: Since Response implements Read (for embassy, but I could also implement std::io::Read
-        //for a new type wrapping it by calling for <self.0 as embedded::io::Read> read), 
-        //I could just pass response into cursor
-        //or into the ReadOnlySource!
-        //Need to make sure it does not grow too big though.
-        //So maybe wrap a fixed sized buffer with that?
-        //Is that even needed, since this is all a wrapper for the http connection which presumbly
-        //is bounded??
-        //Could impl the media source trait directly as well on something 
-        
-        //From Reading Symphonia: the MediaSourceStream has an internal ring buffer where
-        //we specify the max size for it. It reads from the source (our Response), only when needed.
 
         
 
 
 
+
+        //From Reading Symphonia: the MediaSourceStream has an internal ring buffer 
+        //where we specify the max size for it (by default around 64kB max size). 
+        //It reads from the source (our response), only when needed.
+        //When that happens, we read from the underlying HTTP stream.
+
+        
+
+
+        
+        //TODO: Fill up the reader with audio content for 200ms on startup (to prevent jitter)?
 
         //TODO: Use embassy_sync::pipe to communicate between this writer and the reader that passes data
         //into I2S stream?
@@ -357,21 +319,23 @@ pub mod audio_stream {
                 .expect("Only one thread/async task at a time should read the stream source");
             //Note that since the Mutex guarantees this thread to have exclusive access
             //to StreamSourceInner, we do not need to pay the additional performance cost of RefCell
-            lock.inner.get_mut().read(buf).map_err(|e| Error::other(e))
+            lock.inner.get_mut().read(buf)
+            .inspect(|read_bytes| log::trace!("read {} bytes!", read_bytes))
+            .map_err(|e| Error::other(e))
         }
     }
 
-    impl<'a> StreamSource<'a> {
-        pub fn new_stream(
-            response: Response<&'a mut EspHttpConnection>,
-        ) -> ReadOnlySource<StreamSource<'a>> {
-            ReadOnlySource::new(StreamSource {
-                inner: Mutex::new(StreamSourceInner {
-                    inner: RefCell::new(response),
-                }),
-            })
-        }
+    
+    pub fn new_stream<'a> (
+        response: Response<&'a mut EspHttpConnection>,
+    ) -> ReadOnlySource<StreamSource<'a>> {
+        ReadOnlySource::new(StreamSource {
+            inner: Mutex::new(StreamSourceInner {
+                inner: RefCell::new(response),
+            }),
+        })
     }
+    
 
     ///SAFTEY: We use a RefCell (which dynamically checkes the borrowing rules) 
     /// to make sure we access the underlying HTTPS stream in a unique way.
@@ -379,11 +343,8 @@ pub mod audio_stream {
     /// 
     /// We needed to implement this because EspHttpConnection has the following field:
     ///raw_client: *mut esp_http_client
-    unsafe impl<'a> Send for StreamSourceInner<'a> {
-        
-    }
+    unsafe impl<'a> Send for StreamSourceInner<'a> {}
     
-
 }
 
 
@@ -627,10 +588,7 @@ pub mod wifi {
 
     use embedded_svc::{
         http::{client::Client as HttpClient, Method},
-        io::{Read, Write},
-        //utils::io,
         wifi::{AuthMethod, ClientConfiguration, Configuration},
-        
     };
 
     use esp_idf_svc::{
@@ -682,8 +640,6 @@ pub mod wifi {
             *WIFI.lock().unwrap() = Some(wifi);
         }
         
-
-
         // Create HTTP client
         //
         // Note: To send a request to an HTTPS server, you can do:        
@@ -695,17 +651,10 @@ pub mod wifi {
         
         let client = HttpClient::wrap(
             EspHttpConnection::new(&config)?);
-        
-
 
         Ok(client)
     }
 
-    ///Starts streaming the audio
-    pub async fn get_request(client: &mut HttpClient<EspHttpConnection>,) -> Result<(), io::EspIOError>{
-
-        todo!()
-    }
 
     //TODO REWRITE THE STUFF BELOW
     /// Test sending an HTTP GET request.
@@ -717,11 +666,6 @@ pub mod wifi {
         // Send request
         //
         // Note: If you don't want to pass in any headers, you can also use `client.get(url, headers)`.
-
-        //On my computer the Get is 
-        // GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */*  
-        //For HTTP 1.1 (what we use), if we just did a GET request with no headers then that is equivalent
-        //to this
         let request = client.request(Method::Get, url, &headers)?;
         log::info!("-> GET {url}");
         let mut response = request.submit()?;
@@ -731,17 +675,10 @@ pub mod wifi {
         log::info!("<- {status}");
         let mut buf = [0u8; 1024];
 
-        //TODO:
-        //Note there is an async version of try_read_full.
-        //Use the async version for the actual stream (see how try_read_full is implemented; I can 
-        //make my own async version). Note I think you just repeatedly call read and new data is coming in.
-        //COULD DO A double buffer approach, fill in some inital buffer, one it is full fill in the second buffer,
-        //meanwhile read only from the first buffer and repeat.
-        //Increase the buffer size when the buffer you are writing to is full and the swap to read
-        //from it has not happend yet. So use 2 VecDeques (its dynamic).
-        //Use channels or globals to pass around the buffers?
 
         //This try_read_full calls an underlying function which Reads data from http stream.
+        //While an async version of this function exists, the necessary traits to call it
+        //are not implemented on any type so we can't use it.
         let bytes_read = try_read_full(&mut response, &mut buf)
         .map_err(|e| e.0)?;
     
@@ -757,73 +694,6 @@ pub mod wifi {
 
         Ok(())
     }
-
-    //from esp-std book
-    //     fn get(url: impl AsRef<str>) -> Result<()> {
-    //     // 1. Create a new EspHttpClient. (Check documentation)
-    //     // ANCHOR: connection
-    //     let connection = EspHttpConnection::new(&Configuration {
-    //         use_global_ca_store: true,
-    //         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
-    //         ..Default::default()
-    //     })?;
-    //     // ANCHOR_END: connection
-    //     let mut client = Client::wrap(connection);
-
-    //     // 2. Open a GET request to `url`
-    //     let headers = [("accept", "text/plain")];
-    //     let request = client.request(Method::Get, url.as_ref(), &headers)?;
-
-    //     // 3. Submit write request and check the status code of the response.
-    //     // Successful http status codes are in the 200..=299 range.
-    //     let response = request.submit()?;
-    //     let status = response.status();
-
-    //     println!("Response code: {}\n", status);
-
-    //     match status {
-    //         200..=299 => {
-    //             // 4. if the status is OK, read response data chunk by chunk into a buffer and print it until done
-    //             //
-    //             // NB. see http_client.rs for an explanation of the offset mechanism for handling chunks that are
-    //             // split in the middle of valid UTF-8 sequences. This case is encountered a lot with the given
-    //             // example URL.
-    //             let mut buf = [0_u8; 256];
-    //             let mut offset = 0;
-    //             let mut total = 0;
-    //             let mut reader = response;
-    //             loop {
-    //                 if let Ok(size) = Read::read(&mut reader, &mut buf[offset..]) {
-    //                     if size == 0 {
-    //                         break;
-    //                     }
-    //                     total += size;
-    //                     // 5. try converting the bytes into a Rust (UTF-8) string and print it
-    //                     let size_plus_offset = size + offset;
-    //                     match str::from_utf8(&buf[..size_plus_offset]) {
-    //                         Ok(text) => {
-    //                             print!("{}", text);
-    //                             offset = 0;
-    //                         }
-    //                         Err(error) => {
-    //                             let valid_up_to = error.valid_up_to();
-    //                             unsafe {
-    //                                 print!("{}", str::from_utf8_unchecked(&buf[..valid_up_to]));
-    //                             }
-    //                             buf.copy_within(valid_up_to.., 0);
-    //                             offset = size_plus_offset - valid_up_to;
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //             println!("Total: {} bytes", total);
-    //         }
-    //         _ => bail!("Unexpected response code: {}", status),
-    //     }
-
-    //     Ok(())
-    // }
-
 
 }
 
