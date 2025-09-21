@@ -6,7 +6,7 @@ use embedded_svc::{
     io::{Read, Write},
 };
 
-use esp_idf_svc::hal::i2s::I2sDriver;
+use esp_idf_svc::{hal::i2s::I2sDriver, io::utils::try_read_full};
 //Note esp_idf_svc re-exports esp_idf_hal so we can just use that hal from here.
 #[allow(unused)]
 use esp_idf_svc::{
@@ -107,6 +107,7 @@ use  embassy_futures::select::select;
 
 const STATION_URLS: [&'static str;1] = ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3"];
 
+use std::io::Cursor;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
@@ -165,11 +166,13 @@ async fn main(_spawner: Spawner) -> ! {
     let adc1 = peripherals.adc1;
     let adc_pin = peripherals.pins.gpio5;
 
-
+    //CONT. FROM HERE
+    
     /*CRITICAL NOTE:
     TODO:
     Confirm that your I2S master (e.g., an ESP32 or other microcontroller) 
     is configured to output the necessary clock signals (BCLK and LRCK) at the correct rates.
+    The clocks must be synchronised - so one should be derived from the other.
     
     */
     let sound  = peripherals.i2s0;//TODO: look into this from docs and more.
@@ -208,9 +211,94 @@ async fn main(_spawner: Spawner) -> ! {
     };
 
     
-    loop {
-        led_driver.flip_led(led::LEDs::Red);
-        async_timer.delay_ms(500).await;
+    // loop {
+    //     led_driver.flip_led(led::LEDs::Red);
+    //     async_timer.delay_ms(500).await;
+    // }
+
+    //Could spawn everything from here below in an async Task.
+
+    //Start streaming audio from the station
+    //For STATION_URL[0] we get around 3.66 kb per 200ms 
+    //start with 1 second buffer
+    //TODO: maybe change this to a different type? Make this a dynamic buffer?
+    let mut buf = [0u8; 1024 * 4 * 5];
+    
+    {
+
+        // Send request
+
+        //On my computer the Get is 
+        // GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */*  
+        //For HTTP 1.1 (what we use), if we just did a GET request with no headers then that is equivalent
+        //to this
+        let request = client.get( STATION_URLS[0]).unwrap();
+        log::info!("-> GET {}", STATION_URLS[0]);
+        let mut response = request.submit().unwrap();
+
+        // Process response
+        let status = response.status();
+        log::info!("<- {status}");
+        
+
+        //TODO:
+        //Note there is an async version of try_read_full.
+        //Use the async version for the actual stream (see how try_read_full is implemented; I can 
+        //make my own async version). Note I think you just repeatedly call read and new data is coming in.
+        //COULD DO A double buffer approach, fill in some inital buffer, one it is full fill in the second buffer,
+        //meanwhile read only from the first buffer and repeat.
+        //Increase the buffer size when the buffer you are writing to is full and the swap to read
+        //from it has not happend yet. So use 2 VecDeques (its dynamic).
+        //Use channels or globals to pass around the buffers?
+
+        //So I could write an async version that fills up a VecDequque for 200ms on startup
+        //by calling read in a loop in an async block with select.
+        //We could do something like this maybe:
+
+        //         use std::collections::VecDeque;
+
+        // let deq1 = VecDeque::from([1, 2, 3, 4]);
+        // let deq2: VecDeque<_> = [1, 2, 3, 4].into();
+
+        //This try_read_full calls an underlying function which Reads data from http stream.
+        //So we read chunks the size of buf.len().
+        //While an async version of this function exists, the necessary traits to call it
+        //are not implemented on any type so we can't use it.
+        
+        let bytes_read = try_read_full(&mut response, &mut buf)
+        .map_err(|e| log::error!("Error reading bytes: {}", e.0)).unwrap();
+    
+        log::info!("Read {bytes_read} bytes");
+
+        //We want to pass all bytes read to decoder.
+        //Cursor implements Symphonia's MediaSource trait which is needed for decoding.
+        //Could also have used this instead of cursor:
+        // https://docs.rs/symphonia-core/0.5.4/symphonia_core/io/struct.ReadOnlySource.html 
+        let to_decoder = Cursor::new(&mut buf[0..bytes_read]);
+        
+
+        //CRITICAL: Since Response implements Read (for embassy, but I could also implement std::io::Read
+        //for a new type wrapping it by calling for <self.0 as embedded::io::Read> read), 
+        //I could just pass response into cursor
+        //or into the ReadOnlySource!
+        //Need to make sure it does not grow too big though.
+        //So maybe wrap a fixed sized buffer with that?
+        //Is that even needed, since this is all a wrapper for the http connection which presumbly
+        //is bounded??
+        //Could impl the media source trait directly as well on something 
+        
+        //From Reading Symphonia: the MediaSourceStream has an internal ring buffer where
+        //we specify the max size for it. It reads from the source (our Response), only when needed.
+
+        
+
+
+
+
+        //TODO: Use embassy_sync::pipe to communicate between this writer and the reader that passes data
+        //into I2S stream?
+
+        
     }
 
     //Add call to diagnose here which never returns
@@ -240,7 +328,63 @@ async fn main(_spawner: Spawner) -> ! {
 //     }
 // }
 
+pub mod audio_stream {
+    use std::io::Error;
+    use symphonia::core::io::ReadOnlySource;
+    use esp_idf_svc::http::client::{EspHttpConnection, Response};
+    use std::cell::RefCell;
+    use std::sync::Mutex;
+    /// A wrapper around the Response from the GET request.
+    /// It implements std::io:Read by calling into the inner read which itself calls 
+    /// the embedded::io::Read implementation on the underlying connection.
+    /// This allows us to bridge the gap from the HTTPS Response to Symphonia's MediaSource.
+    pub struct StreamSource<'a> {
+        //We wrap StreamSourceInner in a mutex because we needed the stream source
+        // to impl Sync as well so we would have
+        //impl<R: Read + Send + Sync> MediaSource for ReadOnlySource<R> as needed.
+        inner: Mutex<StreamSourceInner<'a>>
+    }
 
+    struct StreamSourceInner<'a> {
+        inner: RefCell<Response<&'a mut EspHttpConnection>>
+    }
+
+    impl std::io::Read for StreamSource<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+            let mut lock = self
+                .inner
+                .lock()
+                .expect("Only one thread/async task at a time should read the stream source");
+            //Note that since the Mutex guarantees this thread to have exclusive access
+            //to StreamSourceInner, we do not need to pay the additional performance cost of RefCell
+            lock.inner.get_mut().read(buf).map_err(|e| Error::other(e))
+        }
+    }
+
+    impl<'a> StreamSource<'a> {
+        pub fn new_stream(
+            response: Response<&'a mut EspHttpConnection>,
+        ) -> ReadOnlySource<StreamSource<'a>> {
+            ReadOnlySource::new(StreamSource {
+                inner: Mutex::new(StreamSourceInner {
+                    inner: RefCell::new(response),
+                }),
+            })
+        }
+    }
+
+    ///SAFTEY: We use a RefCell (which dynamically checkes the borrowing rules) 
+    /// to make sure we access the underlying HTTPS stream in a unique way.
+    /// This ensures this implementation of Send is sound.
+    /// 
+    /// We needed to implement this because EspHttpConnection has the following field:
+    ///raw_client: *mut esp_http_client
+    unsafe impl<'a> Send for StreamSourceInner<'a> {
+        
+    }
+    
+
+}
 
 
 ///The LEDs are on the IO expander peripheral: [the TCA9554A](https://www.ti.com/product/TCA9554A).
@@ -557,6 +701,12 @@ pub mod wifi {
         Ok(client)
     }
 
+    ///Starts streaming the audio
+    pub async fn get_request(client: &mut HttpClient<EspHttpConnection>,) -> Result<(), io::EspIOError>{
+
+        todo!()
+    }
+
     //TODO REWRITE THE STUFF BELOW
     /// Test sending an HTTP GET request.
     pub fn test_get_request(client: &mut HttpClient<EspHttpConnection>) -> Result<(), io::EspIOError> {
@@ -567,6 +717,11 @@ pub mod wifi {
         // Send request
         //
         // Note: If you don't want to pass in any headers, you can also use `client.get(url, headers)`.
+
+        //On my computer the Get is 
+        // GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */*  
+        //For HTTP 1.1 (what we use), if we just did a GET request with no headers then that is equivalent
+        //to this
         let request = client.request(Method::Get, url, &headers)?;
         log::info!("-> GET {url}");
         let mut response = request.submit()?;
@@ -576,6 +731,7 @@ pub mod wifi {
         log::info!("<- {status}");
         let mut buf = [0u8; 1024];
 
+        //TODO:
         //Note there is an async version of try_read_full.
         //Use the async version for the actual stream (see how try_read_full is implemented; I can 
         //make my own async version). Note I think you just repeatedly call read and new data is coming in.
@@ -824,12 +980,14 @@ pub mod speaker {
                 speaker_driver.i2c.write_read(Self::I2C_ADDR, 
                     &[Register::ChipID1 as u8], read_buf.as_mut()).unwrap();
                 
-                assert_eq!(read_buf[0], Register::ChipID1.default(), "MISTAKEN IDENTITY");
+                assert_eq!(read_buf[0], Register::ChipID1.default(), 
+                "MISTAKEN IDENTITY: expected this to be the codec");
 
                 speaker_driver.i2c.write_read(Self::I2C_ADDR, 
                     &[Register::ChipID2 as u8], read_buf.as_mut()).unwrap();
 
-                assert_eq!(read_buf[0], Register::ChipID2.default(), "MISTAKEN IDENTITY");
+                assert_eq!(read_buf[0], Register::ChipID2.default(), 
+                "MISTAKEN IDENTITY: expected this to be the codec");
 
             }
 
