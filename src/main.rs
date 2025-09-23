@@ -6,6 +6,7 @@ use embedded_svc::{
     io::{Read, Write},
 };
 
+#[allow(unused)]
 use esp_idf_svc::{hal::i2s::I2sDriver, io::utils::try_read_full};
 //Note esp_idf_svc re-exports esp_idf_hal so we can just use that hal from here.
 #[allow(unused)]
@@ -27,6 +28,7 @@ use esp_idf_svc::{
     //Alternative Timer approach if needed
     //https://github.com/esp-rs/esp-idf-hal/blob/master/examples/blinky_async.rs
 };
+use symphonia::core::{formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint};
 
 
 //use embedded_hal::{digital::OutputPin};
@@ -97,15 +99,21 @@ No busy-loop polling: CPU sleeps when there’s no work to do, using WFI.
 
 from: https://docs.embassy.dev/embassy-executor/git/cortex-m/index.html#embassy-executor
 
-**NOT TRUE FOR STD**
+**NOT TRUE FOR STD (ACTUALLY I AM NOT SURE; Maybe it is not True here where STD is built on FREERTOS.
+It is true for general std I think (but I am not sure)**
 
 */
 
 use embassy_executor::Spawner;
 use embedded_hal_async::delay::DelayNs;
 use  embassy_futures::select::select;
+use static_cell::StaticCell;
 
 const STATION_URLS: [&'static str;1] = ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3"];
+
+//We need to do this because otherwise Rust thinks that client drops before
+//our media_stream (which borrows the client mutablly). 
+static CLIENT: StaticCell<Client<EspHttpConnection>> = StaticCell::new();
 
 
 #[embassy_executor::main]
@@ -172,7 +180,43 @@ async fn main(_spawner: Spawner) -> ! {
     Confirm that your I2S master (e.g., an ESP32 or other microcontroller) 
     is configured to output the necessary clock signals (BCLK and LRCK) at the correct rates.
     The clocks must be synchronised - so one should be derived from the other.
+
+    From I2S ESP for S3 docs:
+    In PDM mode, regardless of whether you are using raw PDM or PCM format, the data unit width is always 16 bits.
+
+    TDM is for if we had multiple audio channels (more than 2).
+
+    So we use what the ESP32-S3 docs (https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2s.html)
+    call I2C standard mode: Philips Format with 24bit sample data (this 
+    config matches the docs of the codec).
+
+    SO I think we need to interleave our Symphonia decoded samples (see here:
+    https://github.com/pdeljanov/Symphonia/blob/master/symphonia/examples/basic-interleaved.rs)
+
+    Make sure the following are followed (VERIFY these also apply to the RUST API by looking
+    at the source code for I2SDriver):
+
+        **NOTE** can also set th ES8311 to use 32-bit words or 16-bit (what happens if the codec is
+        set to 24bit words but  32-bit samples are used?)
+
+        if slot_bit_width is set to I2S_SLOT_BIT_WIDTH_24BIT, 
+        to keep MCLK a multiple to the BCLK, i2s_std_clk_config_t::mclk_multiple should be set to 
+        multiples that are divisible by 3 
+        such as I2S_MCLK_MULTIPLE_384. Otherwise, WS will be inaccurate.
+        IN RUST:
+        StdClkConfig::from_sample_rate_hz make sure to use [MclkMultiple::M384] for mclk_multiple field!
+
+        (from 
+        https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2s.html#std-tx-mode
+        :)
+        But specially, when the data width is 24-bit, the data buffer should be aligned with 3-byte 
+        (i.e., every 3 bytes stands for a 24-bit data in one slot). 
+        Additionally, i2s_chan_config_t::dma_frame_num, i2s_std_clk_config_t::mclk_multiple, 
+        and the writing buffer size should be the multiple of 3, 
+        otherwise the data on the line or the sample rate will be incorrect.
     
+
+    The correct mode for us is I2sDriver::new_std_tx!
     */
     let sound  = peripherals.i2s0;//TODO: look into this from docs and more.
     //Set mclk to None I think (should not be needed). ws is word select which is LRCK.
@@ -223,14 +267,17 @@ async fn main(_spawner: Spawner) -> ! {
 
     //TODO: maybe change this to a different type? Make this a dynamic buffer?
     //let mut buf = [0u8; 1024 * 4 * 5];
+
+    let mut current_station: usize = 0;
     
-    {
+    'start_stream: {
 
         // Send request
         //This GET request is equivalent to GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */* 
-        let request = client.get( STATION_URLS[0]).unwrap();
+        let client = CLIENT.init(client);
+        let request = client.get( STATION_URLS[current_station]).unwrap();
         log::info!("-> GET {}", STATION_URLS[0]);
-        let mut response = request.submit().unwrap();
+        let response = request.submit().unwrap();
 
         // Process response
         let status = response.status();
@@ -238,16 +285,41 @@ async fn main(_spawner: Spawner) -> ! {
         log::info!("Status is: {status}");
 
         let stream_source = audio_stream::new_stream(response);
-      
+        //MediaSourceStreamOptions has just 1 field: max buffer len which is by default 64kB.
+        let media_stream = 
+        MediaSourceStream::new(Box::new(stream_source), Default::default());
         
+        let codecs = symphonia::default::get_codecs();
+        //The probe will be used to automatically detect the media 
+        //format and instantiate a compatible FormatReader.
+        let probe: &'static symphonia::core::probe::Probe = symphonia::default::get_probe();
 
+        // Create a probe hint using the file's extension
+        let mut hint = Hint::new();
+        hint.with_extension(STATION_URLS[current_station]
+            .rsplit_once('.')
+            .expect("Urls should end in a file extension").1);
+
+        let format_opts: FormatOptions = Default::default();
+        let metadata_opts: MetadataOptions = Default::default();
+
+        let mut probe_res = probe.format(&hint, media_stream, &format_opts, &metadata_opts).unwrap();
         
+        log::info!("the metadata is {:#?} and the tracks are {:#?}", 
+        probe_res.metadata.get(), probe_res.format.tracks());
 
+        let first_supported_track =  probe_res.format.tracks().iter()
+        .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+        .expect("At least one track should be supported");
+
+        log::info!("the id of first supported track is {:#?} and the codec param are {:#?}", 
+        first_supported_track.id, first_supported_track.codec_params);
 
 
 
         //From Reading Symphonia: the MediaSourceStream has an internal ring buffer 
-        //where we specify the max size for it (by default around 64kB max size). 
+        //where we specify the max size for it (by default around 64kB max size; 
+        //The max size we specify must be >32kB). 
         //It reads from the source (our response), only when needed.
         //When that happens, we read from the underlying HTTP stream.
 
