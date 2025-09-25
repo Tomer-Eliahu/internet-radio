@@ -1,5 +1,6 @@
 # Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000
+#Can change to 8000
 
 # Use this to set FreeRTOS kernel tick frequency to 1000 Hz (100 Hz by default).
 # This allows to use 1 ms granularity for thread sleeps (10 ms by default).
@@ -12,3 +13,27 @@ CONFIG_FREERTOS_HZ=1000
 #After building and flashing, when a panic occurs, the MCU will pause execution. You can then use 
 #idf-monitor and GDB to inspect registers, local variables, and memory to find the root cause of the panic. 
 CONFIG_ESP_SYSTEM_PANIC_GDBSTUB=y
+
+#The chip on the Krovo 2 V3.1: ESP32-S3-WROOM-1-N8R8, 8 MB QSPI flash, 8 MB Octal PSRAM.
+#We need to enable the additional PSRAM
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+CONFIG_SPIRAM_SPEED_40M=y
+
+#maybe disable the following line if this doesn't work
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_BOOT_HW_INIT=y
+
+CONFIG_SPIRAM_ECC_ENABLE=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+#CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=<size_in_bytes>
+
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY=y
+
