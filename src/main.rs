@@ -109,7 +109,39 @@ use embedded_hal_async::delay::DelayNs;
 use  embassy_futures::select::select;
 use static_cell::StaticCell;
 
-const STATION_URLS: [&'static str;1] = ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3"];
+//TODO: the first 2 stations are mp3, Add some that are aac or something else
+const STATION_URLS: [&'static str;2] = ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
+"https://puma.streemlion.com:3130/stream"];
+
+//Mentions location simply means says name of station/ talks in a way that is identifiable
+//
+//977_CLASSROCK is 70's Rock - HitsRadio (North Carolina, USA) (Has ads so maybe get rid?)
+//
+//puma is Classic Rock Legends Radio (LA, CA, USA) (Mentions location) (audio/mpeg):
+// https://puma.streemlion.com:3130/stream
+// (https://www.radio.net/s/classicrocklegends)
+//
+//Smooth Radio London (mentions location):  https://media-ice.musicradio.com/SmoothLondonMP3
+//(https://www.radio.net/s/smoothradiolondon)
+//
+//OzInDi Radio Australia (mentions location): https://streamer.radio.co/s52d0fa340/listen
+//THIS IS audio/aac it is aac!
+//(from https://www.radio.net/s/ozindiradio)
+//
+//Radiowave NZ (mentions location): https://stream.radiowavenz.com/stream (audio/mpeg)
+//(from https://www.radio.net/s/radiowave-nz)
+//Another NZ station (also audio/mpeg), this one is from TuneIN instead of radio.net:
+//https://stream.kixfm.co.nz:8178/stream
+//
+//Cool Radio Canada (audio/aac) (mentions location): https://live.leanstream.co/CKUEF2
+//(from https://www.radio.net/s/coolradiocanada)
+//
+//Timewarp Ireland (mentions location): https://broadcast.shoutstream.co.uk:8052/stream (audio/mpeg)
+//(from https://www.radio.net/s/timewarpireland)
+//
+//Note I don't think aacp (different than aac) should work, 
+//but if you want to try here is a good station for it:
+//https://www.radio.net/s/station-x-xrn-australia 
 
 //We need to do this because otherwise Rust thinks that client drops before
 //our media_stream (which borrows the client mutablly). 
@@ -259,6 +291,9 @@ async fn main(_spawner: Spawner) -> ! {
     //     async_timer.delay_ms(500).await;
     // }
 
+    let client = CLIENT.init(client);
+
+
     //Could spawn everything from here below in an async Task.
 
     //Start streaming audio from the station
@@ -274,7 +309,6 @@ async fn main(_spawner: Spawner) -> ! {
 
         // Send request
         //This GET request is equivalent to GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */* 
-        let client = CLIENT.init(client);
         let request = client.get( STATION_URLS[current_station]).unwrap();
         log::info!("-> GET {}", STATION_URLS[0]);
         let response = request.submit().unwrap();
@@ -286,24 +320,34 @@ async fn main(_spawner: Spawner) -> ! {
 
         let stream_source = audio_stream::new_stream(response);
         //MediaSourceStreamOptions has just 1 field: max buffer len which is by default 64kB.
-        let media_stream = 
-        MediaSourceStream::new(Box::new(stream_source), Default::default());
+        let media_stream = MediaSourceStream::new(Box::new(stream_source), 
+        Default::default());
         
-        let codecs = symphonia::default::get_codecs();
+
         //The probe will be used to automatically detect the media 
         //format and instantiate a compatible FormatReader.
-        let probe: &'static symphonia::core::probe::Probe = symphonia::default::get_probe();
+        //let probe: &'static symphonia::core::probe::Probe = symphonia::default::get_probe();
+
+        //However, running this line makes the program not able to complie as it makes
+        //a **massive** allocation (over 30kB!) causing `dram0_0_seg' to overflow! 
+        //(my understanding is that it places a massive uinitlized or 0-initilized static there).
+
+        //Instead we get this functionality in the let binding of prob_res below.
+        //Then this memory consumption gets placed in PSRAM instead (we have 8MB of PSRAM).
 
         // Create a probe hint using the file's extension
         let mut hint = Hint::new();
-        hint.with_extension(STATION_URLS[current_station]
-            .rsplit_once('.')
-            .expect("Urls should end in a file extension").1);
+        //TODO: some station urls can be like https://puma.streemlion.com:3130/stream .
+        //So *maybe* make a station struct that specifies the format for the hint.
+        //This is optional as it is ok for the hint to be wrong.
+        hint.mime_type("audio/mpeg");
+        hint.with_extension("mp3");
 
         let format_opts: FormatOptions = Default::default();
         let metadata_opts: MetadataOptions = Default::default();
 
-        let mut probe_res = probe.format(&hint, media_stream, &format_opts, &metadata_opts).unwrap();
+        let mut probe_res = Box::new(
+            symphonia::default::get_probe().format(&hint, media_stream, &format_opts, &metadata_opts).unwrap());
         
         log::info!("the metadata is {:#?} and the tracks are {:#?}", 
         probe_res.metadata.get(), probe_res.format.tracks());
@@ -314,6 +358,21 @@ async fn main(_spawner: Spawner) -> ! {
 
         log::info!("the id of first supported track is {:#?} and the codec param are {:#?}", 
         first_supported_track.id, first_supported_track.codec_params);
+
+
+        //Will be used to instantiate a decoder. Make sure to put this in a box and then call make 
+        //(similar to get_probe in probe_res)
+        //let codecs = symphonia::default::get_codecs();
+
+
+        //TODO: see if we can make dynamic station work: just from codec params here
+        //propely configure the Speaker for I2S. 
+        //
+        //For espressif all they do is fixed parameter type stuff (they know bit rate and freq and
+        //encoding ahead of time).
+        // The alternative is that for every station we have a Station struct instance
+        //where we would specify the codec used, the bit rate, the frequency and anything else
+        //we would need to know to configure the speaker.
 
 
 
@@ -328,11 +387,17 @@ async fn main(_spawner: Spawner) -> ! {
 
         
         //TODO: Fill up the reader with audio content for 200ms on startup (to prevent jitter)?
+        //From the decoder output, have two DMA sized buffers then take turns being copied into the DMA write
+        //for the I2S to prevent jitter?
 
         //TODO: Use embassy_sync::pipe to communicate between this writer and the reader that passes data
         //into I2S stream?
 
         
+    }
+
+    loop {
+        std::thread::sleep(Duration::from_millis(100));
     }
 
     //Add call to diagnose here which never returns
