@@ -45,10 +45,16 @@ embassy-futures = "0.1.2"
 embedded-hal-async = "1.0.0"
 embedded-io-async = "0.6.1"
 embedded-io = "0.6.1"
-#symphonia = {version = "0.5.4", features = ["all"]}
-symphonia = {version = "0.5.4", default-features = false, features = ["aac", "mp3", "pcm", "ogg"]}
+symphonia = {version = "0.5.4", features = ["all"]}
+#symphonia = {version = "0.5.4", default-features = false, features = ["aac", "mp3", "pcm", "ogg"]}
 static_cell = "2.1.1"
 
+#We needed to fork symphonia and replace LazyStatic 
+#with std::LazyLock::new(||  Box::new( ..stuff..)) 
+#This makes Rust reserve 1 usize per such static as opposed to the 356152 bytes.
+#Because this data is uninitilized it gets placed in DRAM (which we only have 32KB!)
+[patch.crates-io]
+symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "38fab37d751d796df42d2a211b247afb08f053fd" }
 
 # ---------------------------------------------------------------------------------------------
 
