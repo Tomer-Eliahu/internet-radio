@@ -347,7 +347,9 @@ async fn main(_spawner: Spawner) -> ! {
         let metadata_opts: MetadataOptions = Default::default();
 
         let mut probe_res = Box::new(
-            symphonia::default::get_probe().format(&hint, media_stream, &format_opts, &metadata_opts).unwrap());
+            symphonia::default::get_probe()
+            .format(&hint, media_stream, &format_opts, &metadata_opts)
+            .expect("Format should be identifiable by the probe"));
         
         log::info!("the metadata is {:#?} and the tracks are {:#?}", 
         probe_res.metadata.get(), probe_res.format.tracks());
@@ -384,11 +386,6 @@ async fn main(_spawner: Spawner) -> ! {
 
         
 
-
-        
-        //TODO: Fill up the reader with audio content for 200ms on startup (to prevent jitter)?
-        //From the decoder output, have two DMA sized buffers then take turns being copied into the DMA write
-        //for the I2S to prevent jitter?
 
         //TODO: Use embassy_sync::pipe to communicate between this writer and the reader that passes data
         //into I2S stream?
@@ -945,11 +942,10 @@ pub mod speaker {
     }
     
 
-   
+    ///Note that this type simply controls the hardware via I2C and pa_ctrl_pin.
+    /// I2S is managed separately.
     pub struct SpeakerDriver<I2C: I2c>  {
         i2c: I2C,
-        ///TODO: Note this type has async methods, use them!
-        i2s: esp_idf_svc::hal::i2s::I2sDriver<'static, esp_idf_svc::hal::i2s::I2sTx>,
         pa_ctrl_pin: PinDriver<'static, Gpio48, esp_idf_svc::hal::gpio::Output>,
         vol: Volume
     }
@@ -971,11 +967,10 @@ pub mod speaker {
 
         ///Creates and initlizes the Speaker Driver.
         /// This function initilizes the codec and also turns on the power amplifier (PA).
-        pub fn build(i2c: I2C, i2s: esp_idf_svc::hal::i2s::I2sDriver<'static, esp_idf_svc::hal::i2s::I2sTx>, 
-        pa_ctrl_pin: Gpio48) -> Self {
+        pub fn build(i2c: I2C, pa_ctrl_pin: Gpio48) -> Self {
 
             let pa_ctrl_pin = PinDriver::output(pa_ctrl_pin).unwrap();
-            let mut speaker_driver = Self{ i2c, i2s, pa_ctrl_pin, vol: Volume(0) };
+            let mut speaker_driver = Self{ i2c, pa_ctrl_pin, vol: Volume(0) };
             
             speaker_driver.codec_software_reset();
 
@@ -1045,6 +1040,7 @@ pub mod speaker {
             //reset everything and power down
             self.i2c.write(Self::I2C_ADDR, &[Register::Reset as u8, Register::Reset.default()]).unwrap();
             
+            //We could make this async, but this is not critical (1 time set up cost).
             std::thread::sleep(Duration::from_millis(100));
 
             //no reset and power up
