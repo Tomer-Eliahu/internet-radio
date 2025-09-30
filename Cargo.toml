@@ -49,13 +49,16 @@ embedded-io = "0.6.1"
 symphonia = {version = "0.5.4", default-features = false, features = ["aac", "mp3", "pcm", "ogg"]}
 static_cell = "2.1.1"
 embedded-hal-bus = {version= "0.3.0", features =["alloc", "std"]}
+symphonia-bundle-mp3 = {version = "0.5.4", features=["mp3"]}
 
 #We needed to fork symphonia and replace LazyStatic 
 #with std::LazyLock::new(||  Box::new( ..stuff..)) 
 #This makes Rust reserve 1 usize per such static as opposed to the 356152 bytes.
 #Because this data is uninitilized it gets placed in DRAM (which we only have 32KB!)
 [patch.crates-io]
-symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "2f2ee3b7df8f9aec13aa340f62ccf415a353a3c4" }
+symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "b350c2b4e44dfe639c38525a7684509cbdfb7554" }
+symphonia-bundle-mp3 = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "b350c2b4e44dfe639c38525a7684509cbdfb7554" }
+
 #Note to self: using new git rev here, if the build fails, undo this change!
 # https://github.com/Tomer-Eliahu/Symphonia/commits/master/
 

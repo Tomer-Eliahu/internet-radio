@@ -30,7 +30,7 @@ use esp_idf_svc::{
     //Alternative Timer approach if needed
     //https://github.com/esp-rs/esp-idf-hal/blob/master/examples/blinky_async.rs
 };
-use symphonia::core::{audio::RawSampleBuffer, codecs::Decoder, 
+use symphonia::core::{audio::{AudioBuffer, RawSampleBuffer}, codecs::Decoder, 
     formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint};
 use symphonia::core::errors::Error as symphonia_Error;
 
@@ -157,6 +157,11 @@ const STATION_URLS: [&'static str;2] = ["https://18063.live.streamtheworld.com/9
 static CLIENT: StaticCell<Client<EspHttpConnection>> = StaticCell::new();
 
 use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC};
+
+use symphonia_bundle_mp3::MpaDecoder;
+use symphonia_bundle_mp3::decoder::State;
+
+
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
 
@@ -599,10 +604,14 @@ unsafe extern "C" {
             *num *= 2;
         }
 
-        log::warn!("Past reserve_mem");
+       
 
-        // let mut thing: Box<[u8]> = vec![0;2048].into_boxed_slice();
-        // thing.copy_from_slice(&reserve_mem);
+        let mut thing: Box<[u8]> = vec![1;2048].into_boxed_slice();
+        for num in thing.iter_mut() {
+            *num *= 2;
+        }
+        
+        log::warn!("Past reserve_mem");
         
 
         // let mut aac_decoder = Box::new(
@@ -614,14 +623,44 @@ unsafe extern "C" {
      
         //THE PROBLEM: verified by trying to allocate 1 MB on the heap -- is allocating to the heap!
         //THIS IS THE PROBLEM! -- CONTINUE FROM HERE
-        let mut decoder = Box::new(
-        <symphonia::default::codecs::MpaDecoder as 
-        symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
-        .expect("MP3 decoder should be able to be set up"));
+        // let mut decoder = Box::new(
+        // <symphonia::default::codecs::MpaDecoder as 
+        // symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
+        // .expect("MP3 decoder should be able to be set up"));
 
-        /*  let state = State::new(params.codec);
+        // CONTINUE FROM HERE
+        // NEW PROBLEM:: WATCH DOG! I think this is an improvement
 
-        Ok(MpaDecoder { params: params.clone(), state, buf: AudioBuffer::unused() })
+        let state = State::Layer3(Box::new(symphonia_bundle_mp3::layer3::Layer3::new()));
+
+
+
+        let mut decoder = Box::new(MpaDecoder { params: first_supported_track.codec_params.clone(), 
+            state, buf: AudioBuffer::unused() });
+
+
+        log::warn!("Past Decoder!");
+
+
+        /*      
+        
+            fn try_new(params: &CodecParameters, _: &DecoderOptions) -> Result<Self> {
+                // This decoder only supports MP1, MP2, and MP3.
+                match params.codec {
+                    #[cfg(feature = "mp1")]
+                    CODEC_TYPE_MP1 => (),
+                    #[cfg(feature = "mp2")]
+                    CODEC_TYPE_MP2 => (),
+                    #[cfg(feature = "mp3")]
+                    CODEC_TYPE_MP3 => (),
+                    _ => return unsupported_error("mpa: invalid codec type"),
+                }
+
+                // Create decoder state.
+                let state = State::new(params.codec);
+
+                Ok(MpaDecoder { params: params.clone(), state, buf: AudioBuffer::unused() })
+            }
          */
 
         // loop {            
