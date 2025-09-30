@@ -5,7 +5,7 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8000
 CONFIG_FREERTOS_ISR_STACKSIZE=8000
 #https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-freertos-isr-stacksize
 
-#TODO: disable CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY for performence later.
+#TODO: disable CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY for perf. later.
 CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
 CONFIG_ESP_SYSTEM_HW_STACK_GUARD=y
 
@@ -17,9 +17,14 @@ CONFIG_ESP_IPC_TASK_STACK_SIZE=8000
 CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=20000
 #https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-lwip-tcpip-task-stack-size
 
-#CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8000
-#CONFIG_ESP_MINIMAL_SHARED_STACK_SIZE=3000
-#CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=3000
+CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8000
+CONFIG_PTHREAD_STACK_MIN=5000
+
+CONFIG_ESP_MINIMAL_SHARED_STACK_SIZE=3000
+CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=3000
+
+#-------------------------------Stack settings above----------------------
+
 
 # Use this to set FreeRTOS kernel tick frequency to 1000 Hz (100 Hz by default).
 # This allows to use 1 ms granularity for thread sleeps (10 ms by default).
