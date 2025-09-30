@@ -1,5 +1,25 @@
 # Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=20000
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8000
+
+CONFIG_FREERTOS_ISR_STACKSIZE=8000
+#https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-freertos-isr-stacksize
+
+#TODO: disable CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY for performence later.
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+CONFIG_ESP_SYSTEM_HW_STACK_GUARD=y
+
+CONFIG_ESP_IPC_TASK_STACK_SIZE=8000
+#https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-ipc-task-stack-size
+#CONFIG_ESP_TIMER_TASK_STACK_SIZE
+#https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-timer-task-stack-size
+
+CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=20000
+#https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-lwip-tcpip-task-stack-size
+
+#CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8000
+#CONFIG_ESP_MINIMAL_SHARED_STACK_SIZE=3000
+#CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=3000
 
 # Use this to set FreeRTOS kernel tick frequency to 1000 Hz (100 Hz by default).
 # This allows to use 1 ms granularity for thread sleeps (10 ms by default).
@@ -31,7 +51,8 @@ CONFIG_SPIRAM_BOOT_HW_INIT=y
 CONFIG_SPIRAM_ECC_ENABLE=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
-#CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=<size_in_bytes>
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=2000
+#CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=20000
 #Might be needed for DMA.
 #The MALLOC_CAP_DMA and MALLOC_CAP_INTERNAL flags can be used to allocate memory from this pool.
 #See more here https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/external-ram.html#provide-external-ram-via-malloc
@@ -41,4 +62,12 @@ CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY=y
 
 #PSARM resources: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/kconfig-reference.html#esp-psram
 
+#CONFIG_SPIRAM_MEMTEST=y --runs for us
+#CONFIG_ESP_PANIC_HANDLER_IRAM=y
 
+
+
+#CONFIG_ESP_INT_WDT_TIMEOUT_MS=10000
+#CONFIG_ESP_INT_WDT_TIMEOUT_MS up to 10000
+#CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
+#max is 60 for task timeout
