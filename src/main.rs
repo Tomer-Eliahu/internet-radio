@@ -585,7 +585,8 @@ unsafe extern "C" {
         //free up 1 MB
         //std::mem::drop(reserve_mem);
 
-            unsafe{log::warn!("LAST: PRE DECODER: have {} largest free block size in bytes and total free heap mem is {}",
+        unsafe{
+            log::warn!("LAST: PRE DECODER: have {} largest free block size in bytes and total free heap mem is {}",
             esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
             esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
 
@@ -628,11 +629,32 @@ unsafe extern "C" {
         // symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
         // .expect("MP3 decoder should be able to be set up"));
 
-        // CONTINUE FROM HERE
-        // NEW PROBLEM:: WATCH DOG! I think this is an improvement
+    
+        /*
+            Watchdog causing a problem! I think that explains the failing to allocate maybe?
+        
+            // CONTINUE FROM HERE
+            // NEW PROBLEM:: WATCH DOG! I think this is an improvement
 
+            Might be relevant (watchdog for bootloader-- maybe increase):
+            https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-bootloader-wdt-time-ms
+            
+            also see:
+            https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-int-wdt-timeout-ms
+            and related settings.
+
+            especially see:
+            https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-wifi-enterprise-support
+
+            It says to adjust watch dog timer if using wifi https!
+         */
+        
+
+        //IMPORTANT:
+        //Layer3 is 22KB, so I guess that causes the FreeRTOS main task stack to overflow.
+        //Even if you use Box::new(Something::new()), that Something::new() first exists on the stack
+        //(unless the complier optimizes it out, which it might not)!
         let state = State::Layer3(Box::new(symphonia_bundle_mp3::layer3::Layer3::new()));
-
 
 
         let mut decoder = Box::new(MpaDecoder { params: first_supported_track.codec_params.clone(), 
@@ -640,6 +662,11 @@ unsafe extern "C" {
 
 
         log::warn!("Past Decoder!");
+
+        loop {            
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
 
 
         /*      
