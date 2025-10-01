@@ -49,6 +49,8 @@ embedded-io = "0.6.1"
 symphonia = {version = "0.5.4", default-features = false, features = ["aac", "mp3", "pcm", "ogg"]}
 static_cell = "2.1.1"
 embedded-hal-bus = {version= "0.3.0", features =["alloc", "std"]}
+
+#TODO: get rid of this if it turns out I don't need to fork this mp3 crate.
 symphonia-bundle-mp3 = {version = "0.5.4", features=["mp3"]}
 
 #We needed to fork symphonia and replace LazyStatic 

@@ -1,6 +1,6 @@
 # Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
 #was 28000 with no problems
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=60000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=80000
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8000
 
 CONFIG_FREERTOS_ISR_STACKSIZE=8000

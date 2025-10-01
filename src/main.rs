@@ -165,15 +165,18 @@ use symphonia_bundle_mp3::decoder::State;
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
 
-    /* CRITICAL:
+    /* TODO: don't forget to read about and maybe add:
+    
+        CRITICAL:
         More things to try
         https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-wifi-dynamic-rx-buffer-num
         CONFIG_ESP32_WIFI_DYNAMIC_RX_BUFFER_NUM
 
         CONFIG_LWIP_L2_TO_L3_COPY --ALSO IMPORTANT MAYBE
     
-    
-     */
+    */
+
+
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
@@ -196,23 +199,7 @@ async fn main(_spawner: Spawner) -> ! {
 
 
     
-    // let reserve_mem = [1u8; 8048];
     //let reserve_mem = Box::new([1; 1024 * 1024]);
-
-    
-     /*        
-     #[doc = " @brief Get the total free size of all the regions that have the given capabilities\n\n This function takes all regions capable of having the given capabilities allocated in them\n and adds up the free space they have.\n\n @note Note that because of heap fragmentation it is probably not possible to allocate a single block of memory\n of this size. Use heap_caps_get_largest_free_block() for this purpose.\n\n @param caps        Bitwise OR of MALLOC_CAP_* flags indicating the type\n                    of memory\n\n @return Amount of free bytes in the regions"]
-    pub fn heap_caps_get_free_size(caps: u32) -> usize;
-}
-unsafe extern "C" {
-    #[doc = " @brief Get the total minimum free memory of all regions with the given capabilities\n\n This adds all the low watermarks of the regions capable of delivering the memory\n with the given capabilities.\n\n @note Note the result may be less than the global all-time minimum available heap of this kind, as \"low watermarks\" are\n tracked per-region. Individual regions' heaps may have reached their \"low watermarks\" at different points in time. However,\n this result still gives a \"worst case\" indication for all-time minimum free heap.\n\n @param caps        Bitwise OR of MALLOC_CAP_* flags indicating the type\n                    of memory\n\n @return Amount of free bytes in the regions"]
-    pub fn heap_caps_get_minimum_free_size(caps: u32) -> usize;
-}
-unsafe extern "C" {
-    #[doc = " @brief Get the largest free block of memory able to be allocated with the given capabilities.\n\n Returns the largest value of ``s`` for which ``heap_caps_malloc(s, caps)`` will succeed.\n\n @param caps        Bitwise OR of MALLOC_CAP_* flags indicating the type\n                    of memory\n\n @return Size of the largest free block in bytes."]
-    pub fn heap_caps_get_largest_free_block(caps: u32) -> usize; 
-    
-    MALLOC_CAP_8BIT as _*/
 
     
     let timer_service= EspTaskTimerService::new().unwrap();
@@ -407,6 +394,8 @@ unsafe extern "C" {
         // Process response
         let status = response.status();
         //TODO: actually check if status is valid, and if not add retries? or just straight up panic?
+        //I think add say 5 retries, and then change station to next one, if total retries exceed 20 (4 stations)
+        //panic!
         log::info!("Status is: {status}");
 
         //MediaSourceStreamOptions has just 1 field: max buffer len which is by default 64kB.
@@ -551,11 +540,11 @@ unsafe extern "C" {
         
 
         // let codecs = Box::new({
-        //     //let mut registry = symphonia::core::codecs::CodecRegistry::new();
-        //     // registry.register_all::<symphonia::default::codecs::AacDecoder>();
-        //     // registry.register_all::<symphonia::default::codecs::MpaDecoder>();
+        //     let mut registry = symphonia::core::codecs::CodecRegistry::new();
+        //     registry.register_all::<symphonia::default::codecs::AacDecoder>();
+        //     registry.register_all::<symphonia::default::codecs::MpaDecoder>();
 
-        //     //registry
+        //     registry
         // });
         
 
@@ -577,13 +566,6 @@ unsafe extern "C" {
         */
         
         
-        // loop {            
-        //     std::thread::sleep(std::time::Duration::from_millis(100));
-        // }
-        //std::thread::sleep(std::time::Duration::from_millis(100));
-        
-        //free up 1 MB
-        //std::mem::drop(reserve_mem);
 
         unsafe{
             log::warn!("LAST: PRE DECODER: have {} largest free block size in bytes and total free heap mem is {}",
@@ -599,21 +581,6 @@ unsafe extern "C" {
     
         }
         
-        let mut reserve_mem = Box::new([1u8; 8048]);
-
-        for num in reserve_mem.iter_mut() {
-            *num *= 2;
-        }
-
-       
-
-        let mut thing: Box<[u8]> = vec![1;2048].into_boxed_slice();
-        for num in thing.iter_mut() {
-            *num *= 2;
-        }
-        
-        log::warn!("Past reserve_mem");
-        
 
         // let mut aac_decoder = Box::new(
         // <symphonia::default::codecs::AacDecoder as 
@@ -622,12 +589,11 @@ unsafe extern "C" {
 
         //log::warn!("AAC decoder init!");
      
-        //THE PROBLEM: verified by trying to allocate 1 MB on the heap -- is allocating to the heap!
-        //THIS IS THE PROBLEM! -- CONTINUE FROM HERE
-        // let mut decoder = Box::new(
-        // <symphonia::default::codecs::MpaDecoder as 
-        // symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
-        // .expect("MP3 decoder should be able to be set up"));
+
+        let mut decoder = Box::new(
+        <symphonia::default::codecs::MpaDecoder as 
+        symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
+        .expect("MP3 decoder should be able to be set up"));
 
     
         /*
@@ -650,53 +616,15 @@ unsafe extern "C" {
          */
         
 
-        //IMPORTANT:
-        //Layer3 is 22KB, so I guess that causes the FreeRTOS main task stack to overflow.
-        //Even if you use Box::new(Something::new()), that Something::new() first exists on the stack
-        //(unless the complier optimizes it out, which it might not)!
-        let state = State::Layer3(Box::new(symphonia_bundle_mp3::layer3::Layer3::new()));
-
-
-        let mut decoder = Box::new(MpaDecoder { params: first_supported_track.codec_params.clone(), 
-            state, buf: AudioBuffer::unused() });
-
-
-        log::warn!("Past Decoder!");
-
-        loop {            
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-
-
-        /*      
         
-            fn try_new(params: &CodecParameters, _: &DecoderOptions) -> Result<Self> {
-                // This decoder only supports MP1, MP2, and MP3.
-                match params.codec {
-                    #[cfg(feature = "mp1")]
-                    CODEC_TYPE_MP1 => (),
-                    #[cfg(feature = "mp2")]
-                    CODEC_TYPE_MP2 => (),
-                    #[cfg(feature = "mp3")]
-                    CODEC_TYPE_MP3 => (),
-                    _ => return unsupported_error("mpa: invalid codec type"),
-                }
-
-                // Create decoder state.
-                let state = State::new(params.codec);
-
-                Ok(MpaDecoder { params: params.clone(), state, buf: AudioBuffer::unused() })
-            }
-         */
-
-        // loop {            
-        //     std::thread::sleep(std::time::Duration::from_millis(100));
-        // }
 
         //let mut decoder:Box<dyn Decoder>  = decoder;
 
         log::info!("Decoder set up");
+
+        loop {            
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
       
         
         let mut decoded_buf = None;
