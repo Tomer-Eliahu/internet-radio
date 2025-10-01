@@ -119,8 +119,9 @@ use  embassy_futures::select::select;
 use static_cell::StaticCell;
 
 //TODO: the first 2 stations are mp3, Add some that are aac or something else
-const STATION_URLS: [&'static str;2] = ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
-"https://puma.streemlion.com:3130/stream"];
+const STATION_URLS: [&'static str;3] = ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
+"https://puma.streemlion.com:3130/stream",
+"https://streamer.radio.co/s52d0fa340/listen"];
 
 //Mentions location simply means says name of station/ talks in a way that is identifiable
 //
@@ -176,6 +177,21 @@ async fn main(_spawner: Spawner) -> ! {
     
     */
 
+    /* 
+        TODO: if watchdog is causing a problem        
+
+        Might be relevant (watchdog for bootloader-- maybe increase):
+        https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-bootloader-wdt-time-ms
+        
+        also see:
+        https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-int-wdt-timeout-ms
+        and related settings.
+
+        especially see:
+        https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-wifi-enterprise-support
+
+        It says to adjust watch dog timer if using wifi https!
+    */
 
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
@@ -196,10 +212,6 @@ async fn main(_spawner: Spawner) -> ! {
         esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
     
     }
-
-
-    
-    //let reserve_mem = Box::new([1; 1024 * 1024]);
 
     
     let timer_service= EspTaskTimerService::new().unwrap();
@@ -416,25 +428,22 @@ async fn main(_spawner: Spawner) -> ! {
     
         }
 
-        //The probe will be used to automatically detect the media 
-        //format and instantiate a compatible FormatReader.
-        // let probe =  Box::new({            
-        //     let mut probe: symphonia::core::probe::Probe = Default::default();
-        //     symphonia::default::register_enabled_formats(&mut probe);
-        //     probe
-        // });
 
         // Create a probe hint using the file's extension
         let mut hint = Hint::new();
         //TODO: some station urls can be like https://puma.streemlion.com:3130/stream .
         //So *maybe* make a station struct that specifies the format for the hint.
         //This is optional as it is ok for the hint to be wrong.
+
+        //Note it is ok for the hint to be wrong.
         hint.mime_type("audio/mpeg");
         hint.with_extension("mp3");
 
         let format_opts: FormatOptions = Default::default();
         let metadata_opts: MetadataOptions = Default::default();
         
+        //Create a probe which is used to automatically detect the media 
+        //format and instantiate a compatible FormatReader.
         let mut probe_res = Box::new(
             symphonia::default::get_probe()
             .format(&hint, media_stream, &format_opts, &metadata_opts)
@@ -527,45 +536,6 @@ async fn main(_spawner: Spawner) -> ! {
         let mut preload = true; 
         let mut preloaded_bytes= 0;
         
-        
-        log::info!("Setting up codec registry");
-
-        /*let mut registry = CodecRegistry::new();
-            register_enabled_codecs(&mut registry);
-            registry 
-            
-            instead of default::get_codecs */
-
-        //symphonia::default::get_codecs();
-        
-
-        // let codecs = Box::new({
-        //     let mut registry = symphonia::core::codecs::CodecRegistry::new();
-        //     registry.register_all::<symphonia::default::codecs::AacDecoder>();
-        //     registry.register_all::<symphonia::default::codecs::MpaDecoder>();
-
-        //     registry
-        // });
-        
-
-        //Instantiate a decoder.
-        let decoder_options: symphonia::core::codecs::DecoderOptions = symphonia::core::codecs::DecoderOptions::default();
-        // let mut decoder =              
-        // symphonia::default::get_codecs()
-        // .make(&first_supported_track.codec_params, &decoder_options)
-        // .expect("Making a Decoder for a supported track should not fail");
-        
-        //Make uses function pointers, apparently, 
-        //these function pointers are null for us here (for some reason).
-
-        /*TODO: based on codec_params type create the right decoder for us:
-            /// MPEG Layer 3 (MP3)
-            pub const CODEC_TYPE_MP3: CodecType = CodecType(0x1003);
-            /// Advanced Audio Coding (AAC)
-            pub const CODEC_TYPE_AAC: CodecType = CodecType(0x1004);
-        */
-        
-        
 
         unsafe{
             log::warn!("LAST: PRE DECODER: have {} largest free block size in bytes and total free heap mem is {}",
@@ -576,49 +546,44 @@ async fn main(_spawner: Spawner) -> ! {
             esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
             esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
             esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
-        
-    
-    
         }
+
+
+        //Instantiate a decoder.
+        let decoder_options: symphonia::core::codecs::DecoderOptions = symphonia::core::codecs::DecoderOptions::default();
+        let mut decoder =              
+        symphonia::default::get_codecs()
+        .make(&first_supported_track.codec_params, &decoder_options)
+        .inspect_err(|_| 
+            log::error!("Please only select radio stations with symphonia supported codecs"))
+        .expect("Making a Decoder for a supported track should not fail");
         
 
-        // let mut aac_decoder = Box::new(
-        // <symphonia::default::codecs::AacDecoder as 
-        // symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
-        // .expect("MP3 decoder should be able to be set up"));
-
-        //log::warn!("AAC decoder init!");
-     
-
-        let mut decoder = Box::new(
-        <symphonia::default::codecs::MpaDecoder as 
-        symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
-        .expect("MP3 decoder should be able to be set up"));
-
-    
-        /*
-            Watchdog causing a problem! I think that explains the failing to allocate maybe?
+        /*TODO: 
+            If the above fails, then do
         
-            // CONTINUE FROM HERE
-            // NEW PROBLEM:: WATCH DOG! I think this is an improvement
+            based on codec_params type create the right decoder for us:
+            /// MPEG Layer 3 (MP3)
+            pub const CODEC_TYPE_MP3: CodecType = CodecType(0x1003);
+            /// Advanced Audio Coding (AAC)
+            pub const CODEC_TYPE_AAC: CodecType = CodecType(0x1004);
 
-            Might be relevant (watchdog for bootloader-- maybe increase):
-            https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-bootloader-wdt-time-ms
-            
-            also see:
-            https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-int-wdt-timeout-ms
-            and related settings.
 
-            especially see:
-            https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-wifi-enterprise-support
-
-            It says to adjust watch dog timer if using wifi https!
-         */
+            //THIS WORKED!!! (even for all formats!)
+            let mut aac_decoder = Box::new(
+            <symphonia::default::codecs::AacDecoder as 
+            symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
+            .expect("AAC decoder should be able to be set up"));
         
-
+            log::warn!("AAC decoder init!");
         
-
-        //let mut decoder:Box<dyn Decoder>  = decoder;
+            //THIS WORKED!!! (even for all formats!)
+            let mut decoder = Box::new(
+            <symphonia::default::codecs::MpaDecoder as 
+            symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
+            .expect("MP3 decoder should be able to be set up"));
+        
+        */
 
         log::info!("Decoder set up");
 
