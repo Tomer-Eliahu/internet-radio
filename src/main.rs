@@ -582,14 +582,14 @@ async fn main(_spawner: Spawner) -> ! {
             <symphonia::default::codecs::MpaDecoder as 
             symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
             .expect("MP3 decoder should be able to be set up"));
+
+            // loop {            
+            //     std::thread::sleep(std::time::Duration::from_millis(100));
+            // }
         
         */
 
         log::info!("Decoder set up");
-
-        loop {            
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
       
         
         let mut decoded_buf = None;
@@ -685,6 +685,7 @@ async fn main(_spawner: Spawner) -> ! {
                         if preloaded_bytes >= DMA_BUFFER_SIZE {
                             preload = false;
                             i2s_driver.tx_enable().unwrap();
+                            log::info!("Music start!")
                         }
 
                         //If we could not write all of this buf data into our DMA buffers
@@ -1218,7 +1219,7 @@ pub mod wifi {
 /// programmable digital filtering and Dynamic Range Compression in the DAC path (from the user guide).
 ///     
 ///* Ideally we want the device to work in its default clock mode (where we supply
-/// LRCK (Left/Right data alignment clock) and SCL (Bit clock for synchronisation)). 
+/// LRCK (Left/Right data alignment clock) and SCLK (Bit clock for synchronisation)). 
 /// This mode sets our MCU as the "master" for the I2S.
 /// 
 ///* I2S capable of up to 24 bits.
@@ -1227,8 +1228,7 @@ pub mod wifi {
 ///     - Single Speed (Fs normally range from 8 kHz to 48 kHz).
 ///     - Double Speed (Fs normally range from 64 kHz to 96 kHz).
 /// 
-///**Note: (only applicable to master mode; not the mode we will be using)** 
-/// The DAC only works in single speed mode.
+/// * The DAC only works in single speed mode.
 /// the ratio between internal DAC clock and LRCK must be equal or greater than 256, 
 /// and this ratio must be integral multiple of sixteen.
 /// 
@@ -1241,13 +1241,39 @@ pub mod wifi {
 /// but since we are using it to listen to music here,
 /// we will leave it at its default setting of disabled.
 /// 
-///* The DAC has an equalizer, but we are not going to use it (it is bypassed by default).
+///* The DAC has an equalizer, but we are not going to use it.
 /// 
 ///* ES8311 has an internal power-on reset.
 ///
+/// 
+/// ### Implementation Notes
+/// Note that we don't rely on being passed MCLK as a reference (that is you can set mclk= None for the I2S
+/// driver).Instead we take BCLK as the source for the raw_internal_mclk.
+/// 
+/// As we can then multiply and divide raw_internal_mclk by values we select, by multiplying it by 8
+/// we will have DAC internal clock freq = final internal mclk (post multiplying) freq = BCLK_freq * 8.
+/// 
+/// Note: The BCLK freq = sample rate * number of channels * bit depth.
+/// Also, when using I2S standard stereo mode, LRCK (word select) has the *same* freq as our sample rate!
+/// (https://en.wikipedia.org/wiki/I%C2%B2S)
+/// 
+/// This means for 16-bit depth audio: 
+///* DAC internal clock freq = sample_rate * 2 * 16 * 8 = 256 * sample_rate = 256 * LRCK .
+/// And for 24-bit depth audio:
+///* DAC internal clock freq = sample_rate * 2 * 24 * 8 = 384 * sample_rate = 384 * LRCK .
+/// 
+/// So this approach sets ideal ratios for each bit depth, and it is completley sample rate agnositc!
+/// 
+/// Note that we must have internal_DAC_CLOCK_freq. <= 35 MHz (from the user guide page 15) if DVDD is 3.3V 
+/// (which is the case for us).
+/// 
+/// Note that as the max sample rate we expect to encounter is 44800Hz our max internal_DAC_CLOCK_freq
+/// will be 384 * 44800 = 17.2032 MHz so we are fine.
+///
 pub mod speaker {
 
- 
+    
+    //!### Power Amplifier Notes
     //!ESP_IO48 is connected to PA_CTRL (from Korvo schematics).
     //!IMPORTANT: we must use this to power up this power amplifier!
     //![PA data sheet](https://www.alldatasheet.com/html-pdf/1131841/ETC1/NS4150/929/8/NS4150.html).
@@ -1255,15 +1281,12 @@ pub mod speaker {
     //!is power down control terminal.
     //!It used to make power consumption more efficent (draw lower power when on standby).
     //!So we want to drive this pin High before use, and drive it low post use 
-    //!(maybe have driving it low be a part of a drop implementation).
+    //!(we have driving it low be a part of the drop implementation).
 
 
 
     //For the codec (ES8311), our MCU pins we are interested in are ([source]):
-    //IO16 = I2S0_MCLK (Master Clock) (this is actually not relevant for us; maybe it is-- give it as a reference
-    //in addition to the 2 clock lines below? is this required? it seems it is needed from the following statement:
-    //" In slave mode, LRCK divider is inactive and ES8311 will detect MCLK/LRCK ratio automatically").
-    //We need to make sure MCLK and LRCK are synced???
+    //IO16 = I2S0_MCLK (Master Clock) (this is actually not relevant for us; We don't depend on it).
 
     //We need to supply the following:
     //IO9=  I2S0_SCLK
@@ -1331,6 +1354,12 @@ pub mod speaker {
 
         ///Creates and initlizes the Speaker Driver.
         /// This function initilizes the codec and also turns on the power amplifier (PA).
+        /// 
+        /// Note that SpeakerDriver does not rely on being passed MCLK as a reference 
+        /// (that is you can set mclk = None for the I2S driver).
+        /// 
+        /// Note that the ratio between DAC internal clock and LRCK will be 
+        /// 384 for 24 bit audio depth and 256 for 16 bit audio depth.
         pub fn build(i2c: I2C, pa_ctrl_pin: Gpio48) -> Self {
 
             let pa_ctrl_pin = PinDriver::output(pa_ctrl_pin).unwrap();
@@ -1460,6 +1489,15 @@ pub mod speaker {
     }
 
 
+
+    //TODO: Think if we should change all I2C writes except in software reset,
+    //to first read the register value and then write it back with just the bits we needed to adjust
+    //changed. That is if we should do read-modify-write operations instead of just writing.
+    //I see the C code sometimes does this and sometimes just writes directly into registers (even ones
+    //with internal reserved bits-- which I never write into).
+
+
+
     ///Registers (just the ones we need).
     /// 
     /// **Important**: bits are numbered starting from 0.
@@ -1475,6 +1513,22 @@ pub mod speaker {
         /// suggested there).
         Reset = 0,
 
+        ///A clock manager register.
+        /// This register has default value of 0.
+        /// 
+        /// We want to write 10110101 into this register to use BCLK as source for raw_internal_master clock (before
+        /// dividing and multiplying) and turn on the clocks we want (DAC).
+        /// The C code writes in  1011 1111 into this OR 0011 1111 When using MCLK as a reference.
+        ClockManager = 0x1,
+
+        ///This is another clock manager register. 
+        /// This register has a default value of 0.
+        /// 
+        /// We simply use it to set MULT_PRE to all 1's. So we want to write 0001 1000 into this.
+        /// This means we will multiply the raw_internal_clock by 8. 
+        /// Read the implementation notes of [speaker][self], to see why we do this.
+        ClockFactors = 0x2,
+        
         ///Power Management. See page 18 in the user guide for more info.
         /// C stuff just writes 0x1 to here (enables everything an startups VMID in normal mode).
         /// default 0b1111_1100.
@@ -1502,21 +1556,36 @@ pub mod speaker {
         /// Default value of 0 which is -95.5dB. Max value 0xFF which corresponds to +32dB.
         DacVol = 0x32,
 
+        ///We want to bypass the DAC equalizer. Has default value of 0000 1000.
+        /// We want to write that default value into this register as the docs are a bit unclear.
+        /// It says it has this default value (so equalizer disabled by default), yet in the register
+        /// description it seems to say the DAC equalizer is enabled by default.
+        DacEqualizer = 0x37,
+
         ///READ ONLY. Should have a value of 0x83.
         ChipID1 = 0xFD,
 
         ///READ ONLY. Should have a value of 0x11.
         ChipID2 = 0xFE,
 
+
+        //I covered all registers that might also be needed in the notes below!
+
+
+
         //-----------Maybe add--------------
-        //In C, they adjust the default of register 0x10 to set  bits 2 and 3 to 1 as well
+        //In C, they adjust the default of register 0x10  (ES8311_SYSTEM_REG10)
+        //to set  bits 2 and 3 to 1 as well
         //(highest bias level). The rest of the register they keep the same as the default.
 
 
+        //REGISTER 0X04 – CLOCK MANAGER, DEFAULT 0001 0000 (sets DAC over sample rate)
+        //C stuff keeps it at the default value for 44.1KHZ and 44.8Khz (and for all higher sample rates)
+        //My understanding is that the audio difference is likely not something you'll notice.
+        //but maybe set it to 128 instead of 64 and see.
 
-        //es8311_write_reg(codec, ES8311_DAC_REG37 (this is 0x37: DAC equalizer), 0x08). 
-        //This is C stuff when starting the codec 
-        //(it is disabling the equlizer which is already disabled by default); 
+        //The C code does this es8311_write_reg(codec, ES8311_GP_REG45, 0x00);
+        //It writes in the default value into this register. might be worth trying.
 
 
         //----- Currently not needed----------------
@@ -1528,12 +1597,6 @@ pub mod speaker {
         // While this mute function should work, there is a cleaner way to do this, that does not result
         // in artifact sounds.
         //SdpIn = 0x09, NOT NEEDED
-
-        //Clock Manager.
-        // Need to set bit 4 to 1 to turn on Bit Clock (ACTUALLY: I am fairly sure this not needed in slave mode;
-        // just in master mode where this pin is output instead of input).
-        // default value of register = 0
-        //ClockManager = 0x01,
 
     }
 
@@ -1547,7 +1610,8 @@ pub mod speaker {
                 Register::SysPwrMgt => 0b1111_1100,
                 Register::SysEnableDac => 0b0000_0010,
                 Register::SysEnableSpeakerDrive => 0b0100_0000,
-                Register::DacMute | Register::DacVol => 0,
+                Register::DacMute | Register::DacVol | Register::ClockManager | Register::ClockFactors => 0,
+                Register::DacEqualizer => 0b0000_1000,
                 Register::ChipID1 => 0x83,
                 Register::ChipID2 => 0x11,
             }
