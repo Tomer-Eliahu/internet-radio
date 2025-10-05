@@ -324,7 +324,7 @@ async fn main(_spawner: Spawner) -> ! {
     //IO8= I2S0_DSDIN
     let (mut bclk, mut dout, mut ws) = (peripherals.pins.gpio9, peripherals.pins.gpio8, peripherals.pins.gpio45);
 
-    //I2S0_MCLK would be gpio16. TODO: maybe set it to Some(gpio16)?
+    //I2S0_MCLK would be gpio16.
     //Master clock line. It is an optional signal depending on the slave side,
     // mainly used for offering a reference clock to the I2S slave device.
     //To set it to None use Option::None::<esp_idf_svc::hal::gpio::Gpio16>.
@@ -503,7 +503,6 @@ async fn main(_spawner: Spawner) -> ! {
         //Our default sample rate if we can't find the actual value.
         let mut sample_rate: u32 = 44800;
         
-        //TODO: Drop the i2S driver and reconfigure it to use actual sample rate!
         if let Some(actual_sample_rate) = first_supported_track.codec_params.sample_rate {
             
             //We can't reconfigure the driver using function. So we need to drop it and rebuild it.
@@ -512,7 +511,7 @@ async fn main(_spawner: Spawner) -> ! {
         }
 
 
-        //Trying 24 bit depth, 44.1Khz. Can always use 16 bit depth (adjust speaker config in that case!)
+        //Trying 24 bit depth. Can always use 16 bit depth (adjust speaker config in that case!)
         let i2s_config = StdConfig::new(
                         //7 DMA buffers, (note DMA_FRAMES_PER_BUFFER %3 == 0 as needed for 24 bit depth).
                         //auto_clear = true means that there will be silence if we have no new data to send.
@@ -583,36 +582,6 @@ async fn main(_spawner: Spawner) -> ! {
             log::error!("Please only select radio stations with symphonia supported codecs"))
         .expect("Making a Decoder for a supported track should not fail");
         
-
-        /*TODO: 
-            If the above fails, then do
-        
-            based on codec_params type create the right decoder for us:
-            /// MPEG Layer 3 (MP3)
-            pub const CODEC_TYPE_MP3: CodecType = CodecType(0x1003);
-            /// Advanced Audio Coding (AAC)
-            pub const CODEC_TYPE_AAC: CodecType = CodecType(0x1004);
-
-
-            //THIS WORKED!!! (even for all formats!)
-            let mut aac_decoder = Box::new(
-            <symphonia::default::codecs::AacDecoder as 
-            symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
-            .expect("AAC decoder should be able to be set up"));
-        
-            log::warn!("AAC decoder init!");
-        
-            //THIS WORKED!!! (even for all formats!)
-            let mut decoder = Box::new(
-            <symphonia::default::codecs::MpaDecoder as 
-            symphonia::core::codecs::Decoder>::try_new(&first_supported_track.codec_params, &decoder_options)
-            .expect("MP3 decoder should be able to be set up"));
-
-            // loop {            
-            //     std::thread::sleep(std::time::Duration::from_millis(100));
-            // }
-        
-        */
 
         log::info!("Decoder set up");
       
@@ -754,14 +723,8 @@ async fn main(_spawner: Spawner) -> ! {
         //where we specify the max size for it (by default around 64kB max size; 
         //The max size we specify must be >32kB). 
         //It reads from the source (our response), only when needed.
-        //When that happens, we read from the underlying HTTP stream.        
-        loop {            
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
+        //When that happens, we read from the underlying HTTP stream.
 
-
-        //TODO: Use embassy_sync::pipe to communicate between this writer and the reader that passes data
-        //into I2S stream?
         
     //}
 
