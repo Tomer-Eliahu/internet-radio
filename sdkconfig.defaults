@@ -59,8 +59,10 @@ CONFIG_SPIRAM_BOOT_HW_INIT=y
 CONFIG_SPIRAM_ECC_ENABLE=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=2000
-#CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=20000
+#Allocate everything big possible on PSRAM instead of internal RAM (we want as much as possible for DMA)
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=200
+
+#CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=60000 #This has no actual impact. It is better if we don't use it.
 #Might be needed for DMA.
 #The MALLOC_CAP_DMA and MALLOC_CAP_INTERNAL flags can be used to allocate memory from this pool.
 #See more here https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/external-ram.html#provide-external-ram-via-malloc
@@ -84,27 +86,43 @@ CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY=y
 
 # Wi-Fi
 #
-#might be needed 
-#CONFIG_LWIP_WND_SCALE=y
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=25
+#25 is the max. Each of these buffers is about 1.6KB. So 25*16= 40KB. We make reads 32KB in size at a time.
+
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=9
+#Instead of the default 16. We pass these "saved" buffers into CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM instead.
+
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=128
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
+
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
-CONFIG_ESP_WIFI_TX_BA_WIN=32
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
+#32 is the max for the BA_WIN
+CONFIG_ESP_WIFI_TX_BA_WIN=32
 CONFIG_ESP_WIFI_RX_BA_WIN=32 
-#BA_WIN must be min(2*static_buffer_num, dynamic_buffer_num)
+#BA_WIN shpuld be min(2*static_buffer_num, dynamic_buffer_num)
+
 
 #
 # LWIP
 #
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
+#CONFIG_LWIP_WND_SCALE=y
 
+#Note these are the max sizes we have for sure as the TCP window scaling option which enables higher values
+#must be supported by both us and the transmitting radio station, so we can't rely on that.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
 CONFIG_LWIP_TCP_WND_DEFAULT=65534
-#The recv window, from 2440 to 1024000 (defualt 5760)
+
 
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 
 #UDP max is 64
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
+
+
+#CONFIG_LWIP_L2_TO_L3_COPY=y
+
+#Extra optimizations (These take DMA memory and don't seem critical)
+#CONFIG_LWIP_IRAM_OPTIMIZATION=y
+#CONFIG_LWIP_EXTRA_IRAM_OPTIMIZATION=y

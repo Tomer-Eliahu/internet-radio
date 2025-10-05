@@ -157,7 +157,7 @@ const STATION_URLS: [&'static str;3] = ["https://18063.live.streamtheworld.com/9
 //our media_stream (which borrows the client mutablly). 
 static CLIENT: StaticCell<Client<EspHttpConnection>> = StaticCell::new();
 
-use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC};
+use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA};
 
 use symphonia_bundle_mp3::MpaDecoder;
 use symphonia_bundle_mp3::decoder::State;
@@ -166,13 +166,9 @@ use symphonia_bundle_mp3::decoder::State;
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
 
-    /* TODO: don't forget to read about and maybe add:
+    /* TODO: 
+        maybe add:
     
-        CRITICAL:
-        More things to try
-        https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-wifi-dynamic-rx-buffer-num
-        CONFIG_ESP32_WIFI_DYNAMIC_RX_BUFFER_NUM
-
         CONFIG_LWIP_L2_TO_L3_COPY --ALSO IMPORTANT MAYBE
     
     */
@@ -207,9 +203,12 @@ async fn main(_spawner: Spawner) -> ! {
         esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
         esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
         
-        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
+        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
+        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+
+        log::warn!("DMA mem is:");
+        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
     
     }
 
@@ -279,9 +278,12 @@ async fn main(_spawner: Spawner) -> ! {
         esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
         
         
-        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
+        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
+        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+
+        log::warn!("DMA mem is:");
+        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
     
     
     }
@@ -340,9 +342,18 @@ async fn main(_spawner: Spawner) -> ! {
     //dma_buffer_size = dma_frame_num * slot_num * slot_bit_width / 8.
     //(source: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2s.html#data-transport)
 
-    const DMA_FRAMES_PER_BUFFER: u32 = 240;
-    const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (24/8); // this is 1440. 
+    // const DMA_FRAMES_PER_BUFFER: u32 = 240;
+    // const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (24/8); // this is 1440. 
     //Note it is divisable by 3.
+
+    //NOTE can revert to the above values, the problem is the reading from the stream,
+    //Not that the DMA buffers are full!
+    //TODO revert to the above values maybe
+
+    //Try for smooth playback
+    const DMA_FRAMES_PER_BUFFER: u32 = 681;
+    const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (24/8); // this is 4086.
+    
 
     //interrupt_interval(unit: sec) = dma_frame_num / sample_rate
     //This is about 5.4ms of audio here.
@@ -376,6 +387,10 @@ async fn main(_spawner: Spawner) -> ! {
     //For this value we have 7ms of audio data is a single DMA buffer (with that many frames) at 96Khz.
     
     //TODO: verify playback is never choopy, if it is increase dma_frames_per buffer (read here above).
+
+    
+    //The read of the source of the stream will be in chunks of size 32768/2.
+    //This is slightly bigger than 4 DMA buffers of our max size.
 
     /* I2S notes ************************************************************************************/
 
@@ -421,9 +436,12 @@ async fn main(_spawner: Spawner) -> ! {
             esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
             
             
-            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+            // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
+            // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
+            // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+
+            log::warn!("DMA mem is:");
+            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
         
     
         }
@@ -496,10 +514,11 @@ async fn main(_spawner: Spawner) -> ! {
 
         //Trying 24 bit depth, 44.1Khz. Can always use 16 bit depth (adjust speaker config in that case!)
         let i2s_config = StdConfig::new(
-                        //6 DMA buffers, 240 frames per buffer (note 240 %3 == 0 as needed for 24 bit depth).
+                        //7 DMA buffers, (note DMA_FRAMES_PER_BUFFER %3 == 0 as needed for 24 bit depth).
                         //auto_clear = true means that there will be silence if we have no new data to send.
                         //Note this acts as our jitter buffer!
             i2s::config::Config::default().auto_clear(true)
+            .dma_buffer_count(7)
             .frames_per_buffer(DMA_FRAMES_PER_BUFFER), //Maybe need to adjust this Config in partiuclar
 
             i2s::config::StdClkConfig::from_sample_rate_hz(sample_rate)
@@ -524,9 +543,12 @@ async fn main(_spawner: Spawner) -> ! {
             esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
         
         
-            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+            // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
+            // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
+            // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+
+            log::warn!("DMA mem is:");
+            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
         
     
         }
@@ -543,9 +565,12 @@ async fn main(_spawner: Spawner) -> ! {
             esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
 
                 
-            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+            // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
+            // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
+            // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+
+            log::warn!("DMA mem is:");
+            esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
         }
 
 
@@ -704,7 +729,7 @@ async fn main(_spawner: Spawner) -> ! {
                         i2s_driver.write_all_async(buf.as_bytes()).await.unwrap();
                     }
 
-                    
+                    log::info!("buffer decoded onto DMA!");
                 },
                 None => unreachable!(),
             }
@@ -811,15 +836,28 @@ pub mod audio_stream {
     }
 
     impl std::io::Read for StreamSource<'_> {
-        fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+        fn read(&mut self, mut buf: &mut [u8]) -> Result<usize, std::io::Error> {
             let mut lock = self
                 .inner
                 .lock()
                 .expect("Only one thread/async task at a time should read the stream source");
+            //TODO: change to trace or get rid of the line below. Change log below back to trace
+            log::warn!("READING from Stream source now!");
+
+            //TODO: maybe adjust this amount if needed. 
+            //We can't handle reading max buf size that we will be given by Symphonia (32768 bytes!),
+            //without a lag in audio playback.
+            //So we make sure to read at most half that. Then Symphonia will adjust the buffer it gives
+            //us to be that size from that point on.
+            let max_internal = 32768/2;
+            if buf.len() > max_internal {
+                buf = &mut buf[..max_internal];
+            }
+
             //Note that since the Mutex guarantees this thread to have exclusive access
             //to StreamSourceInner, we do not need to pay the additional performance cost of RefCell
             lock.inner.get_mut().read(buf)
-            .inspect(|read_bytes| log::trace!("read {} bytes!", read_bytes))
+            .inspect(|read_bytes| log::warn!("read {} bytes!", read_bytes))
             .map_err(|e| Error::other(e))
         }
     }
@@ -1148,6 +1186,7 @@ pub mod wifi {
             ..Default::default()
         };
         
+        //Async client not exposed to Rust (the async connection trait is not impl on EspHttpConnection)
         let client = HttpClient::wrap(
             EspHttpConnection::new(&config)?);
 
@@ -1384,11 +1423,29 @@ pub mod speaker {
                 assert_eq!(read_buf[0], Register::ChipID2.default(), 
                 "MISTAKEN IDENTITY: expected this to be the codec");
 
+                log::warn!("SPEAKER IDENTIFIED");
+
             }
 
+            //Set up raw internal master clock multiplier
+            speaker_driver.i2c.write(Self::I2C_ADDR, 
+                &[Register::ClockFactors as u8 , 0b00011000]).unwrap();
+            
+            //Make sure we don't use DAC Equalizer
+            speaker_driver.i2c.write(Self::I2C_ADDR, 
+                &[Register::DacEqualizer as u8 , Register::DacEqualizer.default()]).unwrap();
+
             //We power up everything except ADC stuff
+
+            //TODO: C CODE JUST WRITES 0x1 into this (below values adjusted to keep ADC stuff powered down).
+            //Was 0b00110101 (TRY THIS AGAIN). IF THAT FAILS, I think try 0b00110001.
+            //Maye try 0b00110101 agian
             speaker_driver.i2c.write(Self::I2C_ADDR, 
                 &[Register::SysPwrMgt as u8 , 0b00110101]).unwrap();
+            
+            //Turn on relevant clocks
+            speaker_driver.i2c.write(Self::I2C_ADDR, 
+                &[Register::ClockManager as u8 , 0b10110101]).unwrap();
 
             //Power up DAC
             speaker_driver.i2c.write(Self::I2C_ADDR, 
@@ -1399,13 +1456,33 @@ pub mod speaker {
             
             speaker_driver.i2c.write(Self::I2C_ADDR, 
                 &[Register::SysEnableSpeakerDrive as u8 , write_in]).unwrap();
+            
+
+            //This is the correct config for pa_ctrl_pin (gpio 48).
+            //Unfortunately, there doesn't appear to be a way to set this as the config in a more idomatic way.
+            let raw_config = esp_idf_svc::sys::gpio_config_t { 
+                pin_bit_mask: (1u64 << 48), 
+                mode: esp_idf_svc::sys::gpio_mode_t_GPIO_MODE_OUTPUT, 
+                pull_up_en: esp_idf_svc::sys::gpio_pullup_t_GPIO_PULLUP_DISABLE,
+                pull_down_en: esp_idf_svc::sys::gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
+                intr_type: esp_idf_svc::sys::gpio_int_type_t_GPIO_INTR_DISABLE};
 
             
+            unsafe { 
+                //Set up the correct config.
+                esp_idf_svc::sys::esp!(esp_idf_svc::sys::gpio_config(&raw_config)).unwrap();
+            }
+            
+            log::info!("GPIO 48 should be correctly configured now");
+
             //Power up the power amplifier
             speaker_driver.pa_ctrl_pin.set_high().unwrap();
 
-            //set the volume to 80% as an initial value
-            speaker_driver.set_vol(Volume::try_from(80).unwrap());
+            //TODO: I don't think this is_set_high actually does anything
+            assert!(speaker_driver.pa_ctrl_pin.is_set_high(), "PA pin not set high. PA is off");
+
+            //set the volume to 60% as an initial value
+            speaker_driver.set_vol(Volume::try_from(60).unwrap());
 
             
             //The speaker driver is all set!
@@ -1518,7 +1595,7 @@ pub mod speaker {
         /// 
         /// We want to write 10110101 into this register to use BCLK as source for raw_internal_master clock (before
         /// dividing and multiplying) and turn on the clocks we want (DAC).
-        /// The C code writes in  1011 1111 into this OR 0011 1111 When using MCLK as a reference.
+        /// The C code writes in 1011 1111 into this OR 0011 1111 When using MCLK as a reference.
         ClockManager = 0x1,
 
         ///This is another clock manager register. 
