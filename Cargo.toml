@@ -34,7 +34,8 @@ embedded-hal = "1.0.0"
 # Note: for me using embassy-time-driver here + embassy-time crate never worked.
 # Luckily, with Embassy we can provide our time instead. So we use the EspTaskTimerService instead.
 # So we are only using Embasssy for the exector + some utils.
-esp-idf-svc = { version = "0.51", features = ["embassy-sync", "critical-section"] }
+#Note that we needed to add "experimental" just so that our fork will complie.
+esp-idf-svc = { version = "0.51", features = ["embassy-sync", "critical-section", "experimental"] }
 
 embassy-executor = { version = "0.9.1", features = ["executor-thread", "arch-std",] }
 
@@ -63,9 +64,9 @@ symphonia-bundle-mp3 = {version = "0.5.4", features=["mp3"]}
 [patch.crates-io]
 symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "b350c2b4e44dfe639c38525a7684509cbdfb7554" }
 symphonia-bundle-mp3 = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "b350c2b4e44dfe639c38525a7684509cbdfb7554" }
+esp-idf-svc = {git = "https://github.com/Tomer-Eliahu/esp-idf-svc.git", rev = "3332c822bac8b07d9b9d092322d386a9566ff33d"}
 
-#Note to self: using new git rev here, if the build fails, undo this change!
-# https://github.com/Tomer-Eliahu/Symphonia/commits/master/
+
 
 # ---------------------------------------------------------------------------------------------
 

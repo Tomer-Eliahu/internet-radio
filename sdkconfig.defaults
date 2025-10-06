@@ -127,3 +127,13 @@ CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 #Extra optimizations (These take DMA memory and don't seem critical)
 #CONFIG_LWIP_IRAM_OPTIMIZATION=y
 #CONFIG_LWIP_EXTRA_IRAM_OPTIMIZATION=y
+
+
+#
+# MBEDTLS
+#
+#Allocate all required MBEDTLS dynamic allocations from SPIRAM (PSRAM) instead of DRAM
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+#Maybe also try (best not if not needed)
+#CONFIG_MBEDTLS_DYNAMIC_BUFFER

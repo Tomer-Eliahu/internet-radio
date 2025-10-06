@@ -6,7 +6,9 @@ use embedded_svc::{
     io::{Read, Write},
 };
 
-use esp_idf_svc::hal::{adc::{attenuation::DB_11, oneshot::{config::AdcChannelConfig, AdcChannelDriver}}, i2s::{self, config::StdConfig}};
+use esp_idf_svc::{hal::{adc::{attenuation::DB_11, oneshot::{config::AdcChannelConfig, AdcChannelDriver}}, 
+i2s::{self, config::StdConfig}}, handle::RawHandle};
+
 #[allow(unused)]
 use esp_idf_svc::{hal::i2s::I2sDriver, io::utils::try_read_full};
 
@@ -121,14 +123,21 @@ use embedded_hal_async::delay::DelayNs;
 use  embassy_futures::select::select;
 use static_cell::StaticCell;
 
-//TODO: the first 2 stations are mp3, Add some that are aac or something else
-const STATION_URLS: [&'static str;3] = ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
+
+const STATION_URLS: [&'static str;7] = 
+["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
 "https://puma.streemlion.com:3130/stream",
-"https://streamer.radio.co/s52d0fa340/listen"];
+"https://ais-sa1.streamon.fm/7000_48k.aac",
+"https://media-ice.musicradio.com/SmoothLondonMP3",
+"https://broadcast.shoutstream.co.uk:8052/stream",
+"https://streamer.radio.co/s52d0fa340/listen",
+"https://stream.radiowavenz.com/stream",
+];
 
 //Mentions location simply means says name of station/ talks in a way that is identifiable
 //
 //977_CLASSROCK is 70's Rock - HitsRadio (North Carolina, USA) (Has ads so maybe get rid?)
+//Also prone to timing out
 //
 //puma is Classic Rock Legends Radio (LA, CA, USA) (Mentions location) (audio/mpeg):
 // https://puma.streemlion.com:3130/stream
@@ -146,8 +155,8 @@ const STATION_URLS: [&'static str;3] = ["https://18063.live.streamtheworld.com/9
 //Another NZ station (also audio/mpeg), this one is from TuneIN instead of radio.net:
 //https://stream.kixfm.co.nz:8178/stream
 //
-//Cool Radio Canada (audio/aac) (mentions location): https://live.leanstream.co/CKUEF2
-//(from https://www.radio.net/s/coolradiocanada)
+//CKUA (Alberta, Canada) (audio/aac) (mentions location): https://ais-sa1.streamon.fm/7000_48k.aac
+//Note it is actually 44.1K. (from https://www.radio.net/s/ckua).
 //
 //Timewarp Ireland (mentions location): https://broadcast.shoutstream.co.uk:8052/stream (audio/mpeg)
 //(from https://www.radio.net/s/timewarpireland)
@@ -391,9 +400,7 @@ async fn main(_spawner: Spawner) -> ! {
     /* I2S notes ************************************************************************************/
 
 
-    //MediaSourceStream demands a 'static lifetime of everything involved in making it.
-    //Since we know client has 'static lifetime, and that we only ever have a single MediaSourceStream
-    //active in any given time, this is fine.
+    
     let raw_client: *mut Client<EspHttpConnection> = client;
 
     
@@ -409,10 +416,15 @@ async fn main(_spawner: Spawner) -> ! {
         
 
         //Could spawn everything from here below in an async Task.
+        //TODO: make this into an async function
         let stream = async {
 
-            //SAFTEY: This is fine as we always drop the media stream before we get back here.
-            //So there is always ever 1 single mut borrow of client active at any time.
+
+            //SAFTEY:
+            //MediaSourceStream demands a 'static lifetime of everything involved in making it.
+            //This is fine as we always drop the media stream before we get back here.
+            //So there is always ever 1 single mut borrow of client active at any time
+            //and that borrow lasts as long as *actually* needed.
             let client: &'static mut Client<EspHttpConnection> = unsafe {
                 &mut *raw_client
             };
@@ -420,7 +432,20 @@ async fn main(_spawner: Spawner) -> ! {
 
             // Send request
             //This GET request is equivalent to GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */* 
-            let request = client.get( STATION_URLS[current_station]).unwrap();
+            //let request = client.get( STATION_URLS[current_station]).unwrap();
+
+            //As we did a test get request earlier, we can just use this modify_get_request.
+            //We needed to make this function in a fork of esp-idf-svc as this functionality was not
+            //exposed in Rust APIs. The alternative was to drop and recreate the EspHttpConnection
+            //on each station change which is inefficent.
+            //The reason for this is that 
+            //Unfortunately, Rust APIs don't currently consider the possbility that the HTTP response
+            //is an endless stream of data, and try to flush the old response on a new get request.
+            //So for us, it will block forever.
+            client.connection().modify_get_request(STATION_URLS[current_station]).unwrap();
+            let request = 
+            embedded_svc::http::client::Request::wrap(client.connection());
+
             log::info!("-> GET {}", STATION_URLS[current_station]);
             let response = request.submit().unwrap();
 
@@ -463,7 +488,7 @@ async fn main(_spawner: Spawner) -> ! {
             //So *maybe* make a station struct that specifies the format for the hint.
             //This is optional as it is ok for the hint to be wrong.
 
-            //Note it is ok for the hint to be wrong.
+            //Note it is ok for the hint to be wrong, and it seems like most stations are mp3.
             hint.mime_type("audio/mpeg");
             hint.with_extension("mp3");
 
@@ -662,6 +687,8 @@ async fn main(_spawner: Spawner) -> ! {
                         //Add on Restart required error, to break out of this future with the current station number?
                         //TODO: Decide what to do. Can also always move this whole thing into a seperate function.
                         //Then on this error, we return from said function and do what it says.
+                        //Can also simply break here (which returns from this future).
+                        //In that case modify the select below. 
                         
                         
                         //worst case just panic here and that restarts the entire program
@@ -705,7 +732,7 @@ async fn main(_spawner: Spawner) -> ! {
                             i2s_driver.write_all_async(buf.as_bytes()).await.unwrap();
                         }
 
-                        log::info!("buffer decoded onto DMA!");
+                        log::trace!("buffer decoded onto DMA!");
                     },
                     None => unreachable!(),
                 }
@@ -739,11 +766,12 @@ async fn main(_spawner: Spawner) -> ! {
 
  
 
-    //TODO: have in a select: 3 loops that never terminate: 
-    //Another that blinks the RED led I think.
-    //If there is a station change, the second future breakes from the loop (so it terminates),
-    //with the value of what the station change should be. 
-    //Then the bigger loop of get request to the new station, decoder, etc.. is set up again!
+    //TODO: 
+    //Add a task/future that blinks the RED led I think. In a doc comment point out
+    //that it is for the user to see the program has not crashed or bugged out or something.
+    //So if a certain station is not working, the user knows the problem is with the station,
+    //not the program.
+   
     //Maybe preload some data to DMA before enabling transmit channel.
     //I think I need to preload at least 1 DMA buffer length.
 
@@ -759,7 +787,7 @@ async fn main(_spawner: Spawner) -> ! {
 async fn speaker_control<I2C: I2c>(speaker_controller: &mut SpeakerDriver<I2C>, current_station: usize,
 adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gpio5)-> usize {
 
-    const VOL_ADJUST_AMOUNT: u8 = 10;
+    const VOL_ADJUST_AMOUNT: u8 = 5;
 
     let timer_service = EspTaskTimerService::new().unwrap();
     let mut button_async_timer = timer_service.timer_async().unwrap();
@@ -817,7 +845,7 @@ adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gp
                 break (current_station + 1) % STATION_URLS.len()
             },
 
-            3000.. => log::info!("No button press"),
+            3000.. => log::trace!("No button press"),
 
             res => log::error!("Could not definitively identify which button was pressed. Got value {res}")
 
@@ -1205,9 +1233,7 @@ pub mod wifi {
             *WIFI.lock().unwrap() = Some(wifi);
         }
         
-        // Create HTTP client
-        //
-        // Note: To send a request to an HTTPS server, you can do:        
+        // Create HTTPS client
         let config = &HttpConfiguration {
             crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
             use_global_ca_store: true,
@@ -1512,7 +1538,12 @@ pub mod speaker {
             //set the volume to 60% as an initial value
             speaker_driver.set_vol(Volume::try_from(60).unwrap());
 
-            
+            //TODO: maybe need to comment unmute out and try playing with software reset.
+            //maybe set all reset bits to 1 with poweron instead of power off.
+            //For some reason, the reset procedure does not appear to effect this register.
+            //So we make sure the speaker is unmuted.
+            speaker_driver.unmute();
+
             //The speaker driver is all set!
             speaker_driver
         }
