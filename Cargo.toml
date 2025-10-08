@@ -50,7 +50,7 @@ embedded-io = "0.6.1"
 #I think just keep these features for symphonia ["aac", "mp3", "pcm", "all-formats"] (THIS worked for mp3).
 #OR try for symphonia with all features (I only saw aac and mp3 used and aacp which is unsupported so 
 #I am not sure if this is worth it)
-symphonia = {version = "0.5.4", default-features = false, features = ["aac", "mp3", "pcm", "all-formats"]}
+symphonia = {version = "0.5.4", default-features = false, features = ["aac", "mp3", "pcm", "flac", "all-formats"]}
 static_cell = "2.1.1"
 embedded-hal-bus = {version= "0.3.0", features =["alloc", "std"]}
 

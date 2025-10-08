@@ -348,8 +348,8 @@ async fn main(_spawner: Spawner) -> ! {
     //TODO revert to the above values maybe
 
     //Try for smooth playback
-    const DMA_FRAMES_PER_BUFFER: u32 = 681;
-    const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (24/8); // this is 4086.
+    const DMA_FRAMES_PER_BUFFER: u32 = 1023;
+    const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (16/8); // this is 4092.
     
 
     //interrupt_interval(unit: sec) = dma_frame_num / sample_rate
@@ -551,9 +551,9 @@ async fn main(_spawner: Spawner) -> ! {
                 .frames_per_buffer(DMA_FRAMES_PER_BUFFER), //Maybe need to adjust this Config in partiuclar
 
                 i2s::config::StdClkConfig::from_sample_rate_hz(sample_rate)
-                .mclk_multiple(i2s::config::MclkMultiple::M384),
+                .mclk_multiple(i2s::config::MclkMultiple::M256),
                 
-                i2s::config::StdSlotConfig::philips_slot_default(i2s::config::DataBitWidth::Bits24, 
+                i2s::config::StdSlotConfig::philips_slot_default(i2s::config::DataBitWidth::Bits16, 
                     i2s::config::SlotMode::Stereo),
                     
                 i2s::config::StdGpioConfig::default()
@@ -642,7 +642,7 @@ async fn main(_spawner: Spawner) -> ! {
                                     
                                     //We use i24 as I2S data should be signed.
                                     //source: https://en.wikipedia.org/wiki/I%C2%B2S#:~:text=Data%20is%20signed%2C%20encoded%20as,required%20between%20transmitter%20and%20receiver.
-                                    decoded_buf = Some(RawSampleBuffer::<symphonia::core::sample::i24>::new(duration, spec));
+                                    decoded_buf = Some(RawSampleBuffer::<i16>::new(duration, spec));
                                     
                                     //Maybe need to clamp samples to valid range? 
                                     //Actually, made irrelavant by copy_interleaved_ref below.
@@ -1480,6 +1480,11 @@ pub mod speaker {
 
             }
 
+            //Set bit-depth to 16
+            speaker_driver.i2c.write(Self::I2C_ADDR, 
+                &[Register::SdpIn as u8 , 0b0000_1100]).unwrap();
+                
+
             //Set up raw internal master clock multiplier
             speaker_driver.i2c.write(Self::I2C_ADDR, 
                 &[Register::ClockFactors as u8 , 0b00011000]).unwrap();
@@ -1707,6 +1712,16 @@ pub mod speaker {
         ///READ ONLY. Should have a value of 0x11.
         ChipID2 = 0xFE,
 
+        ///Serial Digital Port In
+        ///bit 6 set to 1 mutes. Set to 0 (default) is unmute.
+        /// The other default values mean 24 bit I2S, Left channel to DAC.
+        /// See page 12 of the user guide for more info.
+        /// While this mute function should work, there is a cleaner way to do this, that does not result
+        /// in artifact sounds.
+        /// We want 16 bit depth which means writing in 3 into bits 2:4. 
+        /// So write in 0b0000_1100
+        SdpIn = 0x09,
+
 
         //I covered all registers that might also be needed in the notes below!
 
@@ -1729,14 +1744,6 @@ pub mod speaker {
 
         //----- Currently not needed----------------
 
-        //Serial Digital Port In
-        //bit 6 set to 1 mutes. Set to 0 (default) is unmute.
-        // The other default values mean 24 bit I2S, Left channel to DAC.
-        // See page 12 of the user guide for more info.
-        // While this mute function should work, there is a cleaner way to do this, that does not result
-        // in artifact sounds.
-        //SdpIn = 0x09, NOT NEEDED
-
     }
 
     impl Register {
@@ -1749,7 +1756,8 @@ pub mod speaker {
                 Register::SysPwrMgt => 0b1111_1100,
                 Register::SysEnableDac => 0b0000_0010,
                 Register::SysEnableSpeakerDrive => 0b0100_0000,
-                Register::DacMute | Register::DacVol | Register::ClockManager | Register::ClockFactors => 0,
+                Register::DacMute | Register::DacVol | 
+                    Register::ClockManager | Register::ClockFactors | Register::SdpIn => 0,
                 Register::DacEqualizer => 0b0000_1000,
                 Register::ChipID1 => 0x83,
                 Register::ChipID2 => 0x11,

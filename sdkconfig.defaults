@@ -1,6 +1,6 @@
 # Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
 #was 28000 with no problems
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=120000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=150000
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8000
 
 CONFIG_FREERTOS_ISR_STACKSIZE=8000
@@ -122,7 +122,7 @@ CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 #UDP max is 64
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 
-
+#Test
 #CONFIG_LWIP_L2_TO_L3_COPY=y
 
 #Extra optimizations (These take DMA memory and don't seem critical)
