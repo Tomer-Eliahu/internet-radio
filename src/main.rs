@@ -1,16 +1,13 @@
 use std::sync::Mutex;
 
-#[allow(unused)]
-use embedded_svc::{
-    http::{Method, client::Client},
-    io::{Read, Write},
-};
 
-use esp_idf_svc::{hal::{adc::{attenuation::DB_11, oneshot::{config::AdcChannelConfig, AdcChannelDriver}}, 
-i2s::{self, config::StdConfig}}, handle::RawHandle};
+use embedded_svc::http::{client::Client};
 
-#[allow(unused)]
-use esp_idf_svc::{hal::i2s::I2sDriver, io::utils::try_read_full};
+use esp_idf_svc::hal::{adc::{attenuation::DB_11, oneshot::{config::AdcChannelConfig, AdcChannelDriver}}, 
+i2s::{self, config::StdConfig}};
+
+
+use esp_idf_svc::hal::i2s::I2sDriver;
 
 use esp_idf_svc::hal::adc::oneshot::AdcDriver;
 
@@ -34,19 +31,17 @@ use esp_idf_svc::{
     //Alternative Timer approach if needed
     //https://github.com/esp-rs/esp-idf-hal/blob/master/examples/blinky_async.rs
 };
-use symphonia::core::{audio::{AudioBuffer, RawSampleBuffer}, codecs::Decoder, 
+use symphonia::core::{audio::RawSampleBuffer, 
     formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint};
 use symphonia::core::errors::Error as symphonia_Error;
 
 use crate::speaker::Volume;
-//use embedded_hal::{digital::OutputPin};
+
 #[allow(unused)]
 use crate::{buttons::diagnose, led::LedDriver, speaker::SpeakerDriver};
 use embedded_hal::i2c::I2c;
 
 use embedded_hal_bus::i2c::MutexDevice;
-
-//use symphonia_bundle_mp3::layer3::BitResevoir;
 
 
 /*debug_assertions is by default Enabled for non-release builds
@@ -160,15 +155,15 @@ const STATION_URLS: [&'static str;7] =
 //
 //Timewarp Ireland (mentions location): https://broadcast.shoutstream.co.uk:8052/stream (audio/mpeg)
 //(from https://www.radio.net/s/timewarpireland)
-//
-//Note I don't think aacp (different than aac) should work, 
-//but if you want to try here is a good station for it:
-//https://www.radio.net/s/station-x-xrn-australia 
+
+
+
 
 //We need to do this because otherwise Rust thinks that client drops before
 //our media_stream (which borrows the client mutablly). 
 static CLIENT: StaticCell<Client<EspHttpConnection>> = StaticCell::new();
 
+#[allow(unused)]
 use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA};
 
 

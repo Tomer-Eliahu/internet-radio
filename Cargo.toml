@@ -58,7 +58,7 @@ embedded-hal-bus = {version= "0.3.0", features =["alloc", "std"]}
 #We needed to fork symphonia and replace LazyStatic 
 #with std::LazyLock::new(||  Box::new( ..stuff..)) 
 #This makes Rust reserve 1 usize per such static as opposed to the 356152 bytes.
-#Because this data is uninitilized it gets placed in DRAM (which we only have 32KB!)
+#Because this data is uninitilized it gets placed in DRAM (which is part of internal RAM: we only have 512KB)
 [patch.crates-io]
 symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "a160aaa78d65bd9af3df3f6e47d0ca2551caba4a" }
 
