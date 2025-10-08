@@ -156,7 +156,7 @@ const STATION_URLS: [&'static str;7] =
 //https://stream.kixfm.co.nz:8178/stream
 //
 //CKUA (Alberta, Canada) (audio/aac) (mentions location): https://ais-sa1.streamon.fm/7000_48k.aac
-//Note it is actually 44.1K. (from https://www.radio.net/s/ckua).
+//Note it is actually 44.1KHz. (from https://www.radio.net/s/ckua).
 //
 //Timewarp Ireland (mentions location): https://broadcast.shoutstream.co.uk:8052/stream (audio/mpeg)
 //(from https://www.radio.net/s/timewarpireland)
@@ -170,9 +170,6 @@ const STATION_URLS: [&'static str;7] =
 static CLIENT: StaticCell<Client<EspHttpConnection>> = StaticCell::new();
 
 use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA};
-
-use symphonia_bundle_mp3::MpaDecoder;
-use symphonia_bundle_mp3::decoder::State;
 
 
 #[embassy_executor::main]
@@ -502,7 +499,8 @@ async fn main(_spawner: Spawner) -> ! {
                 .format(&hint, media_stream, &format_opts, &metadata_opts)
                 .expect("Format should be identifiable by the probe"));
             
-            log::info!("the metadata is {:#?} and the tracks are {:#?}", 
+            log::info!("The metadata is {:#?}", probe_res.format.metadata().skip_to_latest());
+            log::info!("Additional metadata is {:#?} and the tracks are {:#?}", 
             probe_res.metadata.get(), probe_res.format.tracks());
 
             let first_supported_track =  probe_res.format.tracks().iter()
@@ -536,9 +534,11 @@ async fn main(_spawner: Spawner) -> ! {
             
             //TODO: is this default sound or should we just panic?? I am not sure
             //Our default sample rate if we can't find the actual value.
-            let mut sample_rate: u32 = 44800;
+            let mut sample_rate: u32 = 48000;
             
             if let Some(actual_sample_rate) = first_supported_track.codec_params.sample_rate {
+                
+                //TODO, add a check sample rate is <= 96KHZ
                 
                 //We can't reconfigure the driver using function. So we need to drop it and rebuild it.
                 log::info!("Found actual sample rate: {}", actual_sample_rate);
@@ -658,6 +658,7 @@ async fn main(_spawner: Spawner) -> ! {
                                 }
 
                                 // Copy the decoded audio buffer into the sample buffer in an interleaved format.
+                                // Note this performs any required conversions.
                                 if let Some(buf) = &mut decoded_buf {
                                     buf.copy_interleaved_ref(decoded_audio);
                                 }
@@ -901,10 +902,13 @@ pub mod audio_stream {
             log::warn!("READING from Stream source now!");
 
             //TODO: maybe adjust this amount if needed. 
-            //We can't handle reading max buf size that we will be given by Symphonia (32768 bytes!),
+            //We sometimes can't handle reading max buf size that we will be given by Symphonia (32768 bytes!),
             //without a lag in audio playback.
             //So we make sure to read at most half that. Then Symphonia will adjust the buffer it gives
             //us to be that size from that point on.
+
+            //This is only needed for a particular mp3 stream it seems!
+            //Just for this one https://18063.live.streamtheworld.com/977_CLASSROCK.mp3
             let max_internal = 32768/2;
             if buf.len() > max_internal {
                 buf = &mut buf[..max_internal];

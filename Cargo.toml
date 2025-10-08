@@ -54,17 +54,15 @@ symphonia = {version = "0.5.4", default-features = false, features = ["aac", "mp
 static_cell = "2.1.1"
 embedded-hal-bus = {version= "0.3.0", features =["alloc", "std"]}
 
-#TODO: get rid of this if it turns out I don't need to fork this mp3 crate.
-symphonia-bundle-mp3 = {version = "0.5.4", features=["mp3"]}
 
 #We needed to fork symphonia and replace LazyStatic 
 #with std::LazyLock::new(||  Box::new( ..stuff..)) 
 #This makes Rust reserve 1 usize per such static as opposed to the 356152 bytes.
 #Because this data is uninitilized it gets placed in DRAM (which we only have 32KB!)
 [patch.crates-io]
-symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "b350c2b4e44dfe639c38525a7684509cbdfb7554" }
-symphonia-bundle-mp3 = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "b350c2b4e44dfe639c38525a7684509cbdfb7554" }
-esp-idf-svc = {git = "https://github.com/Tomer-Eliahu/esp-idf-svc.git", rev = "3332c822bac8b07d9b9d092322d386a9566ff33d"}
+symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "a160aaa78d65bd9af3df3f6e47d0ca2551caba4a" }
+
+esp-idf-svc = {git = "https://github.com/Tomer-Eliahu/esp-idf-svc.git", rev = "0591e5e989cadca5f35863024199cfd44c3f3970"}
 
 
 
