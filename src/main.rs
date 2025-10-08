@@ -119,7 +119,7 @@ use  embassy_futures::select::select;
 use static_cell::StaticCell;
 
 
-const STATION_URLS: [&'static str;7] = 
+const STATION_URLS: [&'static str;11] = 
 ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
 "https://puma.streemlion.com:3130/stream",
 "https://ais-sa1.streamon.fm/7000_48k.aac",
@@ -127,6 +127,19 @@ const STATION_URLS: [&'static str;7] =
 "https://broadcast.shoutstream.co.uk:8052/stream",
 "https://streamer.radio.co/s52d0fa340/listen",
 "https://stream.radiowavenz.com/stream",
+
+
+//Same 44.1kHz FLAC 16 bit NAIM JAZZ
+"https://mscp3.live-streams.nl:8342/jazz-flac.flac",
+//Radio Paradise 44.1kHz FLAC 16 bit
+"https://s2.audiostream.hu/bdpstrock_FLAC",
+
+//48kHz 95bFM
+"https://streams.95bfm.com/stream112",
+
+
+//48kHz Radio SEGA --decoding takes too long (even with gapless false; gapless true makes it take even longer)
+"https://icecast.radiosega.net/rs-flac.ogg",
 ];
 
 //Mentions location simply means says name of station/ talks in a way that is identifiable
@@ -300,7 +313,7 @@ async fn main(_spawner: Spawner) -> ! {
     // }
 
     let client = CLIENT.init(client);
-    let mut current_station: usize = 0;
+    let mut current_station: usize = 7;
 
     //Initilizes the speaker hardware (codec & power amplifier)
     let shared_i2c = MutexDevice::new(&i2c);
@@ -455,7 +468,7 @@ async fn main(_spawner: Spawner) -> ! {
             //When that happens, we read from the underlying HTTP stream.
             let media_stream = MediaSourceStream::new(
                 Box::new(audio_stream::new_stream(response)), 
-                Default::default());
+                symphonia::core::io::MediaSourceStreamOptions{buffer_len: 256 * 1024});
             
             unsafe{
                 log::warn!("POST MediaSourceStream: have {} largest free block size in bytes and total free heap mem is {}",
@@ -484,7 +497,7 @@ async fn main(_spawner: Spawner) -> ! {
             hint.mime_type("audio/mpeg");
             hint.with_extension("mp3");
 
-            let format_opts: FormatOptions = Default::default();
+            let format_opts: FormatOptions = FormatOptions {enable_gapless: false, ..Default::default()};
             let metadata_opts: MetadataOptions = Default::default();
             
             //Create a probe which is used to automatically detect the media 
@@ -706,7 +719,7 @@ async fn main(_spawner: Spawner) -> ! {
                             preloaded_bytes += new_loaded_bytes;
 
                             //If we preloaded 1 DMA_BUFFER of audio data, start transmitting!
-                            if preloaded_bytes >= DMA_BUFFER_SIZE {
+                            if preloaded_bytes >= 6*DMA_BUFFER_SIZE {
                                 preload = false;
                                 i2s_driver.tx_enable().unwrap();
                                 log::info!("Music start!")
@@ -728,7 +741,7 @@ async fn main(_spawner: Spawner) -> ! {
                             i2s_driver.write_all_async(buf.as_bytes()).await.unwrap();
                         }
 
-                        log::trace!("buffer decoded onto DMA!");
+                        log::info!("buffer decoded onto DMA!");
                     },
                     None => unreachable!(),
                 }
@@ -904,7 +917,7 @@ pub mod audio_stream {
 
             //This is only needed for a particular mp3 stream it seems!
             //Just for this one https://18063.live.streamtheworld.com/977_CLASSROCK.mp3
-            let max_internal = 32768/2;
+            let max_internal = 32768*2; //up to 128
             if buf.len() > max_internal {
                 buf = &mut buf[..max_internal];
             }

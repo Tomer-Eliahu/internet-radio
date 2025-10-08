@@ -60,7 +60,7 @@ embedded-hal-bus = {version= "0.3.0", features =["alloc", "std"]}
 #This makes Rust reserve 1 usize per such static as opposed to the 356152 bytes.
 #Because this data is uninitilized it gets placed in DRAM (which is part of internal RAM: we only have 512KB)
 [patch.crates-io]
-symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "a160aaa78d65bd9af3df3f6e47d0ca2551caba4a" }
+symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "e6fded844b37ad3bbc19068f130133ed66e578a5" }
 
 esp-idf-svc = {git = "https://github.com/Tomer-Eliahu/esp-idf-svc.git", rev = "0591e5e989cadca5f35863024199cfd44c3f3970"}
 
