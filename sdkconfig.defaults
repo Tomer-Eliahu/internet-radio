@@ -1,7 +1,7 @@
 # Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
 #was 28000 with no problems
 # 160 appears to be the max we can hit 
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=160000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=162000
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8000
 
 CONFIG_FREERTOS_ISR_STACKSIZE=8000
@@ -18,7 +18,7 @@ CONFIG_ESP_TIMER_TASK_STACK_SIZE=10000
 #https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-timer-task-stack-size
 # Range from 2048 to 65536 Default value: 3584
 
-CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=10000
+CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=8000
 #https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-lwip-tcpip-task-stack-size
 
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8000

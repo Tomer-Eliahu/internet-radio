@@ -119,7 +119,7 @@ use  embassy_futures::select::select;
 use static_cell::StaticCell;
 
 
-const STATION_URLS: [&'static str;11] = 
+const STATION_URLS: [&'static str;12] = 
 ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
 "https://puma.streemlion.com:3130/stream",
 "https://ais-sa1.streamon.fm/7000_48k.aac",
@@ -128,6 +128,9 @@ const STATION_URLS: [&'static str;11] =
 "https://streamer.radio.co/s52d0fa340/listen",
 "https://stream.radiowavenz.com/stream",
 
+//ESP FLAC example 
+//(taken from https://github.com/espressif/esp-adf/blob/master/examples/player/pipeline_http_select_decoder/main/play_http_select_decoder_example.c)
+"https://dl.espressif.com/dl/audio/ff-16b-2c-44100hz.flac",
 
 //Same 44.1kHz FLAC 16 bit NAIM JAZZ
 "https://mscp3.live-streams.nl:8342/jazz-flac.flac",
@@ -497,7 +500,7 @@ async fn main(_spawner: Spawner) -> ! {
             hint.mime_type("audio/mpeg");
             hint.with_extension("mp3");
 
-            let format_opts: FormatOptions = FormatOptions {enable_gapless: false, ..Default::default()};
+            let format_opts: FormatOptions = FormatOptions {enable_gapless: true, ..Default::default()};
             let metadata_opts: MetadataOptions = Default::default();
             
             //Create a probe which is used to automatically detect the media 
@@ -917,7 +920,7 @@ pub mod audio_stream {
 
             //This is only needed for a particular mp3 stream it seems!
             //Just for this one https://18063.live.streamtheworld.com/977_CLASSROCK.mp3
-            let max_internal = 32768*2; //up to 128
+            let max_internal = 32768*4; //up to 128
             if buf.len() > max_internal {
                 buf = &mut buf[..max_internal];
             }
@@ -1552,8 +1555,8 @@ pub mod speaker {
             //TODO: I don't think this is_set_high actually does anything
             assert!(speaker_driver.pa_ctrl_pin.is_set_high(), "PA pin not set high. PA is off");
 
-            //set the volume to 60% as an initial value
-            speaker_driver.set_vol(Volume::try_from(60).unwrap());
+            //set the volume to 70% as an initial value
+            speaker_driver.set_vol(Volume::try_from(70).unwrap());
 
             //TODO: maybe need to comment unmute out and try playing with software reset.
             //maybe set all reset bits to 1 with poweron instead of power off.
