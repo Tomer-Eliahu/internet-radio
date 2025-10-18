@@ -718,7 +718,7 @@ async fn main(_spawner: Spawner) -> ! {
                             // Then after enabling transimitting, finish writing this buf data.
                             if new_loaded_bytes < data.len() {
 
-                                //CRITICAL: this will block if the DMA buffers are full!
+                                //Note this will await if the DMA buffers are full!
                                 i2s_driver.write_all_async(&data[new_loaded_bytes..]).await.unwrap();
 
                             }
