@@ -1503,7 +1503,7 @@ pub mod speaker {
 
             //Set up raw internal master clock multiplier
             speaker_driver.i2c.write(Self::I2C_ADDR, 
-                &[Register::ClockFactors as u8 , 0b00011000]).unwrap();
+                &[Register::ClockFactors as u8 , 0b0]).unwrap();
             
             //Make sure we don't use DAC Equalizer
             speaker_driver.i2c.write(Self::I2C_ADDR, 
@@ -1517,9 +1517,9 @@ pub mod speaker {
             speaker_driver.i2c.write(Self::I2C_ADDR, 
                 &[Register::SysPwrMgt as u8 , 0b00110101]).unwrap();
             
-            //Turn on relevant clocks
+            //Turn on relevant clocks. Use external MCLK as source for internal MCLK
             speaker_driver.i2c.write(Self::I2C_ADDR, 
-                &[Register::ClockManager as u8 , 0b10110101]).unwrap();
+                &[Register::ClockManager as u8 , 0b00110101]).unwrap();
 
             //Power up DAC
             speaker_driver.i2c.write(Self::I2C_ADDR, 
