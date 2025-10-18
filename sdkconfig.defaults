@@ -1,5 +1,4 @@
 # Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
-#was 28000 with no problems
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=120000
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8000
 
@@ -38,7 +37,8 @@ CONFIG_FREERTOS_HZ=1000
 #CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=n
 
 #After building and flashing, when a panic occurs, the MCU will pause execution. You can then use 
-#idf-monitor and GDB to inspect registers, local variables, and memory to find the root cause of the panic. 
+#idf-monitor and GDB to inspect registers, local variables, and memory to find the root cause of the panic.
+#TODO: comment this out (so the program restarts on an unexpected panic), after finishing this project. 
 CONFIG_ESP_SYSTEM_PANIC_GDBSTUB=y
 
 #The chip on the Krovo 2 V3.1: ESP32-S3-WROOM-1-N8R8, 8 MB QSPI flash, 8 MB Octal PSRAM.
@@ -51,7 +51,6 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_SPEED_80M=y
 #CONFIG_SPIRAM_SPEED_40M=y
 
-#maybe disable the following line if this doesn't work
 CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 
 CONFIG_SPIRAM_BOOT_INIT=y
@@ -73,7 +72,7 @@ CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY=y
 
 #PSARM resources: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/kconfig-reference.html#esp-psram
 
-#CONFIG_SPIRAM_MEMTEST=y --runs for us
+#CONFIG_SPIRAM_MEMTEST=y -- already runs for us
 #CONFIG_ESP_PANIC_HANDLER_IRAM=y
 
 

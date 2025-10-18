@@ -53,22 +53,6 @@ see https://docs.rs/log/latest/log/#compile-time-filters .
 */
 
 
-//Note that pin gpio17 in Rust corresponds the pin named IO17 in the ESP docs (which might be connected
-//to a different physical pin on the board; but that is not relevant as the IO17 for us is an alias for that).
-
-
-
-/*From the Embassy website
-
-No busy-loop polling: CPU sleeps when there’s no work to do, using WFI.
-
-from: https://docs.embassy.dev/embassy-executor/git/cortex-m/index.html#embassy-executor
-
-**NOT TRUE FOR STD (ACTUALLY I AM NOT SURE; Maybe it is not True here where STD is built on FREERTOS.
-It is true for general std I think (but I am not sure)**
-
-*/
-
 //-------------------------------------------------------------------------------------
 
 
@@ -139,12 +123,16 @@ const STATION_URLS: [&'static str;7] =
 ///Blink the red led forever. This is meant to indicate to the user the program has not crashed (is still running).
 /// This way, if a certain station is not working, the user knows the problem is with the station,
 ///not the program.
+/// 
+/// Note this may hang a bit when switching between stations. The issue is that the GET requests are blocking
+/// as the async API has not been exposed to Rust yet. While we could use raw calls to the underlying C bindings
+/// to have an async connection, doing that just for this is not worth it.
 #[embassy_executor::task]
 async fn blink(mut led_driver: LedDriver<MutexDevice<'static, I2cDriver<'static>>>, 
     mut led_async_timer: esp_idf_svc::timer::EspAsyncTimer) {
     loop {
         led_driver.flip_led(led::LEDs::Red);
-        led_async_timer.delay_ms(500).await;
+        led_async_timer.delay_ms(1000).await;
     }
 }
 
@@ -317,7 +305,7 @@ async fn main(spawner: Spawner) -> ! {
 /// Polls the buttons for presses and mutes/unmutes, inc/dec volume accordingly.
 /// On changing station (pressing the SET or REC button), returns the new station number.
 /// 
-/// **Note: ** You might want to call [self::buttons::diagnose], 
+/// **Note:** You might want to call [self::buttons::diagnose], 
 /// and make sure these values also correspond to your buttons.
 async fn speaker_control<I2C: I2c>(speaker_controller: &mut SpeakerDriver<I2C>, current_station: usize,
 adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gpio5)-> usize {
@@ -330,7 +318,7 @@ adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gp
 
     let adc = AdcDriver::new(adc1).unwrap();
 
-    // configuring pin to analog read, you can regulate the adc input voltage range depending on your need
+    // Configuring pin to analog read, you can regulate the adc input voltage range depending on your need
     // we use the attenuation of 11db which sets the input voltage range to around 0-3.1V on the esp32-S3.
     let config = AdcChannelConfig {
         attenuation: DB_11,
