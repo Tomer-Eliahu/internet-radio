@@ -1,47 +1,36 @@
 use std::sync::Mutex;
 
-
 use embedded_svc::http::{client::Client};
 
-use esp_idf_svc::hal::{adc::{attenuation::DB_11, oneshot::{config::AdcChannelConfig, AdcChannelDriver}}, 
-i2s::{self, config::StdConfig}};
-
-
-use esp_idf_svc::hal::i2s::I2sDriver;
-
-use esp_idf_svc::hal::adc::oneshot::AdcDriver;
-
 //Note esp_idf_svc re-exports esp_idf_hal so we can just use that hal from here.
-#[allow(unused)]
 use esp_idf_svc::{
-    eventloop::EspSystemEventLoop,
     hal::{
-        delay::FreeRtos, //if not using embassy timer
-        gpio::{InterruptType, PinDriver, Pull},
-        i2c::{I2cConfig, I2cDriver},
-        io::EspIOError,
-        prelude::{Peripherals, *},
-        task::notification::Notification,
-        task::queue::Queue,
+        adc::{attenuation::DB_11, 
+            oneshot::{config::AdcChannelConfig, AdcChannelDriver, AdcDriver}}, 
+        i2c::{I2cConfig, I2cDriver}, i2s::{self, config::StdConfig, I2sDriver}, 
+        prelude::Peripherals
     },
-    http::client::{Configuration, EspHttpConnection},
-    sys::esp_random, //generate a random number (if needed)
-    wifi::{AsyncWifi, EspWifi},
-    timer::EspTaskTimerService
-    //Alternative Timer approach if needed
-    //https://github.com/esp-rs/esp-idf-hal/blob/master/examples/blinky_async.rs
+    http::client::EspHttpConnection,
+    timer::EspTaskTimerService,
 };
+
 use symphonia::core::{audio::RawSampleBuffer, 
     formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint};
+
 use symphonia::core::errors::Error as symphonia_Error;
 
-use crate::speaker::Volume;
-
-#[allow(unused)]
-use crate::{buttons::diagnose, led::LedDriver, speaker::SpeakerDriver};
 use embedded_hal::i2c::I2c;
 
 use embedded_hal_bus::i2c::MutexDevice;
+
+use embassy_executor::Spawner;
+use embedded_hal_async::delay::DelayNs;
+use embassy_futures::select::select;
+use static_cell::StaticCell;
+
+
+#[allow(unused)]
+use crate::{buttons::diagnose, led::LedDriver, speaker::{Volume, SpeakerDriver}};
 
 
 /*debug_assertions is by default Enabled for non-release builds
@@ -61,45 +50,10 @@ is to just adjust the log-level allowed for release builds by setting the cargo-
 see https://docs.rs/log/latest/log/#compile-time-filters .
 */
 
-//Note: to use the 2 system LEDs (that are user programmable) I either
-// need to use I2C to talk to the IO expander peripheral to set its pins (it holds the LEDs)
-// OR use this C thing https://github.com/espressif/esp-bsp/blob/master/bsp/esp32_s3_korvo_2/API.md#bulb-leds
-// (maybe I can call into that from Rust??)
-
-//######## JUST use the I2C driver as shown below (it implements the I2C trait of embedded hal) ############
-//The io expander is TCA9554A (there is a *partial* driver for it [async only] in Rust)-- but I can write my own
-//(not too much work;
-//can even make it a sync implementation of embedded hal I2C trait and contribute it as a pull request
-//to https://github.com/ladvoc/tca9554-rs?tab=readme-ov-file).
-//From the Korvo schematic I2C Address (of this io expander)：0'b 0111 000x .
-//Note that if this address is wrong, then this is the right one:
-// https://esp32.com/viewtopic.php?t=28578
-// Recall some devices have a WhoAmI register ( To check if the device is addressed correctly,
-//read its device ID and print the value. --this one does not though)
-//######## JUST use the I2C driver as shown below (it implements the I2C trait of embedded hal) ############
 
 //Note that pin gpio17 in Rust corresponds the pin named IO17 in the ESP docs (which might be connected
 //to a different physical pin on the board; but that is not relevant as the IO17 for us is an alias for that).
 
-//Note: I will also need to use this IO expander to use the LCD anyway (but *just* for initilization!)...
-//The LCD uses SPI and I2C (primarly SPI-- which is much faster due to underlying hardware differences [this
-//is a general fact])
-
-//Note: from esp-idf-hal README.md: The following pins are not recommended for use by you:
-//ESP32-S3:	26 - 32, 33 - 37* (*= When using Octal Flash and/or Octal PSRAM)
-
-//Note from googling around (https://esp32.com/viewtopic.php?t=34179),
-// it appears for the esp-idf you can pick whichever GPIO pins you want
-//to be primary and secondary I2C.
-
-/*You probably want to do something like this (NOTE this is not for MY BOARD!)
-    let sda = peripherals.pins.gpio10;
-    let scl = peripherals.pins.gpio8;
-    let i2c = peripherals.i2c0;
-    let config = I2cConfig::new().baudrate(100.kHz().into());
-    let i2c = I2cDriver::new(i2c, sda, scl, &config)?;
-
-*/
 
 
 /*From the Embassy website
@@ -113,10 +67,7 @@ It is true for general std I think (but I am not sure)**
 
 */
 
-use embassy_executor::Spawner;
-use embedded_hal_async::delay::DelayNs;
-use  embassy_futures::select::select;
-use static_cell::StaticCell;
+
 
 
 const STATION_URLS: [&'static str;7] = 
@@ -158,40 +109,49 @@ const STATION_URLS: [&'static str;7] =
 
 
 
+#[embassy_executor::task]
+async fn blink(mut led_driver: LedDriver<MutexDevice<'static, I2cDriver<'static>>>, 
+    mut led_async_timer: esp_idf_svc::timer::EspAsyncTimer) {
+    loop {
+        led_driver.flip_led(led::LEDs::Red);
+        led_async_timer.delay_ms(500).await;
+    }
+}
+
+
 
 //We need to do this because otherwise Rust thinks that client drops before
 //our media_stream (which borrows the client mutablly). 
 static CLIENT: StaticCell<Client<EspHttpConnection>> = StaticCell::new();
 
+//Similar reason for this one.
+static I2C_GLOBAL: StaticCell<Mutex<I2cDriver<'static>>> = StaticCell::new();
+
+
+/*
+If you are interested in memory information you could do:
+
 #[allow(unused)]
 use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA};
 
+unsafe{
+    log::warn!("have {} largest free block size in bytes and total free heap mem is {}",
+    esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
+    esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
+    
+    // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
+    // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM
+    // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+
+    log::warn!("DMA mem is:");
+    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
+}
+*/
+
+
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) -> ! {
-
-    /* TODO: 
-        maybe add:
-    
-        CONFIG_LWIP_L2_TO_L3_COPY --ALSO IMPORTANT MAYBE
-    
-    */
-
-    /* 
-        TODO: if watchdog is causing a problem        
-
-        Might be relevant (watchdog for bootloader-- maybe increase):
-        https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-bootloader-wdt-time-ms
-        
-        also see:
-        https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-int-wdt-timeout-ms
-        and related settings.
-
-        especially see:
-        https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-wifi-enterprise-support
-
-        It says to adjust watch dog timer if using wifi https!
-    */
+async fn main(spawner: Spawner) -> ! {
 
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
@@ -201,22 +161,7 @@ async fn main(_spawner: Spawner) -> ! {
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    //unsafe{assert!(esp_idf_svc::sys::heap_caps_check_integrity_all(true));}
 
-     unsafe{log::warn!("START: have {} largest free block size in bytes and total free heap mem is {}",
-        esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
-        esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
-        
-        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
-
-        log::warn!("DMA mem is:");
-        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
-    
-    }
-
-    
     let timer_service= EspTaskTimerService::new().unwrap();
     let mut led_async_timer = timer_service.timer_async().unwrap();
 
@@ -228,26 +173,13 @@ async fn main(_spawner: Spawner) -> ! {
     let i2c = peripherals.i2c0;
 
     let config = I2cConfig::new().baudrate(led::BAUDRATE_FAST.into());
-    //for trouble shooting, maybe enable the following line
-    //config =config.scl_enable_pullup(true).sda_enable_pullup(true).timeout(Duration::from_millis(20).into());
-    let i2c = Mutex::new(I2cDriver::new(i2c, sda, scl, &config).unwrap());
+    let i2c: Mutex<I2cDriver<'static>>  = Mutex::new(I2cDriver::new(i2c, sda, scl, &config).unwrap());
+    let i2c = I2C_GLOBAL.init(i2c);
 
     //Note we share an i2c bus with mutliple devices (the IO expander for LED control and also 
-    //the codec to control the speaker later). However since we only use 1 device at a time this is fine.
-    let shared_i2c = MutexDevice::new(&i2c);
-    let mut led_driver = LedDriver::build(shared_i2c);
-
-    led_driver.flip_led(led::LEDs::Blue);
-
-    let mut x = 7;
-    let y = 35;
-    x += y;
-
-    log::info!("Hello, world!");
-
-    log::info!("x is {x}"); //This works fine.
-
-    
+    //the codec to control the speaker later). However, since we only use 1 device at a time this is fine.
+    let shared_i2c  = MutexDevice::new(i2c);
+    let mut led_driver  = LedDriver::build(shared_i2c);
 
     let modem= peripherals.modem;
 
@@ -265,45 +197,30 @@ async fn main(_spawner: Spawner) -> ! {
             embassy_futures::select::Either::First(_) => unreachable!(),
             embassy_futures::select::Either::Second(res) => {res.unwrap()},
         };
-
-    let _ = wifi::test_get_request(&mut client).expect("Test should not fail");
+    
+    //Note we rely later on having done this here. This makes later code slightly more convient.
+    let _ = wifi::test_get_request(&mut client).expect("wifi get request test should not fail");
 
     log::info!("Wifi should be set up. Blue should stop blinking");
 
     //As the Blue light could have been off at this time we switch it on if need be.
+    //This indicates to the user the wifi is all set.
     match led_driver.get_led_states() {
         (_, false) => led_driver.flip_led(led::LEDs::Blue),
         _ => ()
     };
 
     
-    unsafe{log::warn!("POST WIFI: have {} largest free block size in bytes and total free heap mem is {}",
-        esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
-        esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
-        
-        
-        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-        // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+    //Spawn an async task that continually 
+    //blinks the red led to let the user know the program is still running (has not crashed)
+    spawner.spawn(blink(led_driver, led_async_timer)).unwrap();
 
-        log::warn!("DMA mem is:");
-        esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
     
-    
-    }
-
-    //TODO: I think do this: 
-    //Can put this LED blinking in a seperate async task from here on out
-    // loop {
-    //     led_driver.flip_led(led::LEDs::Red);
-    //     led_async_timer.delay_ms(500).await;
-    // }
-
     let client = CLIENT.init(client);
     let mut current_station: usize = 0;
 
     //Initilizes the speaker hardware (codec & power amplifier)
-    let shared_i2c = MutexDevice::new(&i2c);
+    let shared_i2c = MutexDevice::new(i2c);
     let pa_ctrl_pin= peripherals.pins.gpio48;
     let mut speaker_controller = SpeakerDriver::build(shared_i2c, pa_ctrl_pin);
 
@@ -456,22 +373,6 @@ async fn main(_spawner: Spawner) -> ! {
             let media_stream = MediaSourceStream::new(
                 Box::new(audio_stream::new_stream(response)), 
                 Default::default());
-            
-            unsafe{
-                log::warn!("POST MediaSourceStream: have {} largest free block size in bytes and total free heap mem is {}",
-                esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
-                esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
-                
-                
-                // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-                // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-                // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
-
-                log::warn!("DMA mem is:");
-                esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
-            
-        
-            }
 
 
             // Create a probe hint using the file's extension
@@ -565,42 +466,11 @@ async fn main(_spawner: Spawner) -> ! {
             let mut i2s_driver= 
             I2sDriver::new_std_tx(&mut i2s0, &i2s_config, &mut bclk, &mut dout, mclk.as_mut(), &mut ws)
             .unwrap();
-            
-            unsafe{
-                log::warn!("POST I2S driver: have {} largest free block size in bytes and total free heap mem is {}",
-                esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
-                esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
-            
-            
-                // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-                // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-                // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
-
-                log::warn!("DMA mem is:");
-                esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
-            
-        
-            }
         
             
             //We want to preload data onto the I2S TX channel at least 1 DMA buffer in size
             let mut preload = true; 
             let mut preloaded_bytes= 0;
-            
-
-            unsafe{
-                log::warn!("LAST: PRE DECODER: have {} largest free block size in bytes and total free heap mem is {}",
-                esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
-                esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
-
-                    
-                // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-                // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM (if available)
-                // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
-
-                log::warn!("DMA mem is:");
-                esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
-            }
 
 
             //Instantiate a decoder.
@@ -851,20 +721,6 @@ adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gp
 
 }
 
-
-// let executor = Executor::new();
-
-// executor.run(|spawner| {
-//     spawner.spawn(run(led_driver));
-// });
-    
-// #[embassy_executor::task]
-// async fn run(led_driver: LedDriver<I2cDriver<'_>>) {
-//     loop {
-//         led_driver.flip_led(led::LEDs::Blue);
-//         Timer::after_millis(500).await;
-//     }
-// }
 
 pub mod audio_stream {
     use std::io::Error;

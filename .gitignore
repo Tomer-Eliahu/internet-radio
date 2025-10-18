@@ -5,3 +5,4 @@
 #keep your wifi info private!
 src/wifi/config.rs 
 private.md
+extra_private_notes.rs
