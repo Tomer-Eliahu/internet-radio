@@ -1,14 +1,14 @@
 use std::sync::Mutex;
 
-use embedded_svc::http::{client::Client};
+use embedded_svc::http::client::Client;
 
 //Note esp_idf_svc re-exports esp_idf_hal so we can just use that hal from here.
 use esp_idf_svc::{
     hal::{
         adc::{attenuation::DB_11, 
             oneshot::{config::AdcChannelConfig, AdcChannelDriver, AdcDriver}}, 
-        i2c::{I2cConfig, I2cDriver}, i2s::{self, config::StdConfig, I2sDriver}, 
-        prelude::Peripherals
+            gpio::{Gpio16, Gpio45, Gpio8, Gpio9}, i2c::{I2cConfig, I2cDriver}, 
+            i2s::{self, config::StdConfig, I2sDriver}, prelude::Peripherals
     },
     http::client::EspHttpConnection,
     timer::EspTaskTimerService,
@@ -32,6 +32,8 @@ use static_cell::StaticCell;
 #[allow(unused)]
 use crate::{buttons::diagnose, led::LedDriver, speaker::{Volume, SpeakerDriver}};
 
+
+//-------------------------------------------------------------------------------------
 
 /*debug_assertions is by default Enabled for non-release builds
 and disabled for release builds.
@@ -66,6 +68,31 @@ from: https://docs.embassy.dev/embassy-executor/git/cortex-m/index.html#embassy-
 It is true for general std I think (but I am not sure)**
 
 */
+
+//-------------------------------------------------------------------------------------
+
+
+
+/*
+If you are interested in memory usage information you could do:
+
+#[allow(unused)]
+use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA};
+
+unsafe{
+    log::warn!("have {} largest free block size in bytes and total free heap mem is {}",
+    esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
+    esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
+    
+    // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
+    // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM
+    // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+
+    log::warn!("DMA mem is:");
+    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
+}
+*/
+
 
 
 
@@ -109,6 +136,9 @@ const STATION_URLS: [&'static str;7] =
 
 
 
+///Blink the red led forever. This is meant to indicate to the user the program has not crashed (is still running).
+/// This way, if a certain station is not working, the user knows the problem is with the station,
+///not the program.
 #[embassy_executor::task]
 async fn blink(mut led_driver: LedDriver<MutexDevice<'static, I2cDriver<'static>>>, 
     mut led_async_timer: esp_idf_svc::timer::EspAsyncTimer) {
@@ -128,30 +158,38 @@ static CLIENT: StaticCell<Client<EspHttpConnection>> = StaticCell::new();
 static I2C_GLOBAL: StaticCell<Mutex<I2cDriver<'static>>> = StaticCell::new();
 
 
-/*
-If you are interested in memory information you could do:
 
-#[allow(unused)]
-use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA};
+///Our i2s driver uses DMA. This constant specifies how many audio frames we have in one DMA buffer.
+///           
+///Once a DMA buffer is full, it will be sent to the speaker for us (via an interrupt).
+/// 
+///interrupt_interval(unit: sec) = DMA_FRAMES_PER_BUFFER / sample_rate 
+/// (this is relevant for sending audio with i2s as well).
+///The bigger the better for performence ([source]).
+/// 
+///for DMA_FRAMES_PER_BUFFER = 681:
+///This gives us at least 15ms of audio per DMA buffer (assuming we don't encounter
+///sample rates higher than 44.8Khz).
+/// 
+///[source]: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2s.html#data-transport
+const DMA_FRAMES_PER_BUFFER: u32 = 681;
 
-unsafe{
-    log::warn!("have {} largest free block size in bytes and total free heap mem is {}",
-    esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
-    esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
-    
-    // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-    // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM
-    // esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
-
-    log::warn!("DMA mem is:");
-    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
-}
-*/
-
+///The size of one DMA buffer (we use multiple DMA buffers in our i2s driver).
+///dma_buffer_size = dma_frame_num * slot_num * slot_bit_width / 8 ([source]).
+/// 
+///[source]: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2s.html#data-transport
+const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (24/8); // this is 4086.
 
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
+
+    //These are some *complie* time checks. 
+    const { 
+        assert!(DMA_BUFFER_SIZE <= 4092); //This is the max allowed size. See source in DMA_BUFFER_SIZE doc.
+        assert!(DMA_BUFFER_SIZE % 3 ==0); //Important for 24 bit audio depth
+        assert!(DMA_FRAMES_PER_BUFFER % 3 ==0); //Important for 24 bit audio depth
+    }
 
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
@@ -198,12 +236,12 @@ async fn main(spawner: Spawner) -> ! {
             embassy_futures::select::Either::Second(res) => {res.unwrap()},
         };
     
-    //Note we rely later on having done this here. This makes later code slightly more convient.
-    let _ = wifi::test_get_request(&mut client).expect("wifi get request test should not fail");
+    //Note we rely in the stream function on having done this here. This makes later code slightly more ergonomic.
+    wifi::test_get_request(&mut client).expect("wifi get request test should not fail");
 
-    log::info!("Wifi should be set up. Blue should stop blinking");
+    log::info!("Wifi should be set up. Blue led should stop blinking");
 
-    //As the Blue light could have been off at this time we switch it on if need be.
+    //The Blue light could be off at this time. Thus we switch it on if need be.
     //This indicates to the user the wifi is all set.
     match led_driver.get_led_states() {
         (_, false) => led_driver.flip_led(led::LEDs::Blue),
@@ -212,7 +250,7 @@ async fn main(spawner: Spawner) -> ! {
 
     
     //Spawn an async task that continually 
-    //blinks the red led to let the user know the program is still running (has not crashed)
+    //blinks the red led to let the user know the program is still running (has not crashed).
     spawner.spawn(blink(led_driver, led_async_timer)).unwrap();
 
     
@@ -224,389 +262,40 @@ async fn main(spawner: Spawner) -> ! {
     let pa_ctrl_pin= peripherals.pins.gpio48;
     let mut speaker_controller = SpeakerDriver::build(shared_i2c, pa_ctrl_pin);
 
-    let mut adc1 = peripherals.adc1;
-    let mut adc_pin = peripherals.pins.gpio5;
-
-
-    //We will need these later for the I2S driver. We just want to borrow these.
-
-    let mut i2s0 = peripherals.i2s0;
     
-    //We need to supply the following:
-    //IO9=  I2S0_SCLK (this is the bit clock or BCLK)
-    //IO45= I2S0_LRCK (ws is word select which is LRCK)
-    //IO8= I2S0_DSDIN
-    let (mut bclk, mut dout, mut ws) = (peripherals.pins.gpio9, peripherals.pins.gpio8, peripherals.pins.gpio45);
+    //We need the following for the I2S driver later. 
+    let mut i2s0 = peripherals.i2s0;
 
-    //I2S0_MCLK would be gpio16.
+    //Pin used for sending serial data out to the codec.
+    let mut dout = peripherals.pins.gpio8;
+
+    //The I2S bit clock. Also known as the SCLK (serial clock).
+    let mut bclk = peripherals.pins.gpio9;
+
+    //The I2S word select clock. Also known as the LRCK (left-right clock).
+    let mut ws = peripherals.pins.gpio45; 
+
     //Master clock line. It is an optional signal depending on the slave side,
     // mainly used for offering a reference clock to the I2S slave device.
-    //To set it to None use Option::None::<esp_idf_svc::hal::gpio::Gpio16>.
     let mut mclk = Some(peripherals.pins.gpio16);
-
-
-    /* I2S notes ************************************************************************************/
-    
-    //Note that
-    //i2s_driver.write_all_async(data);
-    //i2s_driver.write_async(data);
-    // will block if the DMA buffers are full!
-
-    //Once a DMA buffer is full, it will be sent to the speaker for us.
-    //dma_buffer_size = dma_frame_num * slot_num * slot_bit_width / 8.
-    //(source: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2s.html#data-transport)
-
-    // const DMA_FRAMES_PER_BUFFER: u32 = 240;
-    // const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (24/8); // this is 1440. 
-    //Note it is divisable by 3.
-
-    //NOTE can revert to the above values, the problem is the reading from the stream,
-    //Not that the DMA buffers are full!
-    //TODO revert to the above values maybe
-
-    //Try for smooth playback
-    const DMA_FRAMES_PER_BUFFER: u32 = 681;
-    const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (24/8); // this is 4086.
-    
-
-    //interrupt_interval(unit: sec) = dma_frame_num / sample_rate
-    //This is about 5.4ms of audio here.
-    //So if we preload 6 DMA buffers, we have about 32ms of audio ahead of time.
-    //lets try this first and see if it works smoothly! 
-
-    //CRITICAL: could change dma_frame_num to 681 (which is divisable by 3).
-    //This gives us 15.4 ms per DMA buffer and 92.6ms For all 6 DMA buffers.
-    //It has DMA_BUFFER_SIZE= 4086 .
-        
-    //Source: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2s.html#application-notes
-    const {
-        assert!(DMA_BUFFER_SIZE <= 4092);
-        assert!(DMA_BUFFER_SIZE % 3 ==0);
-        assert!(DMA_FRAMES_PER_BUFFER % 3 ==0);
-    }
-
-    //FOR DMA_FRAMES_PER_BUFFER = 240:
-    //
-    //2.5 ms of audio data is 1440 bytes (1 DMA buffer) at 96Khz sample rate (the max of the codec).
-    //5ms of audio data is 1440 bytes at 48Khz sample rate (the highest sample rate I expect we will encounter)
-
-    //At a network speed of 60 Mb/s, it would take approximately 4.27 milliseconds, to read 32 KB of data
-    //(this is the max size read at a time by the media source by symphonia)
-    //
-    //So for our playback to never be choppy, we must have:
-    //ms_a_dma_buffer_holds > 4.27
-    //and we *should* have that.
-    
-    //If this becomes a problem, we simply set DMA_FRAMES_PER_BUFFER = 681,
-    //For this value we have 7ms of audio data is a single DMA buffer (with that many frames) at 96Khz.
-    
-    //TODO: verify playback is never choopy, if it is increase dma_frames_per buffer (read here above).
-
-    
-    //The read of the source of the stream will be in chunks of size 32768/2.
-    //This is slightly bigger than 4 DMA buffers of our max size.
-
-    /* I2S notes ************************************************************************************/
-
 
     
     let raw_client: *mut Client<EspHttpConnection> = client;
 
-    
+    //For polling the buttons (which are connected to a single pin in a resistor ladder).
+    let mut adc1 = peripherals.adc1;
+    let mut adc_pin = peripherals.pins.gpio5;
+
 
     loop {
-
+        
         let poll_buttons = 
         speaker_control(&mut speaker_controller, current_station, &mut adc1, &mut adc_pin);
         //If you want to diagnose the button values, uncomment the following:
-        //Add call to diagnose here which never returns
         //buttons::diagnose(adc1, adc_pin);
 
-        
-
-        //Could spawn everything from here below in an async Task.
-        //TODO: make this into an async function
-        let stream = async {
-
-
-            //SAFTEY:
-            //MediaSourceStream demands a 'static lifetime of everything involved in making it.
-            //This is fine as we always drop the media stream before we get back here.
-            //So there is always ever 1 single mut borrow of client active at any time
-            //and that borrow lasts as long as *actually* needed.
-            let client: &'static mut Client<EspHttpConnection> = unsafe {
-                &mut *raw_client
-            };
-
-
-            // Send request
-            //This GET request is equivalent to GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */* 
-            //let request = client.get( STATION_URLS[current_station]).unwrap();
-
-            //As we did a test get request earlier, we can just use this modify_get_request.
-            //We needed to make this function in a fork of esp-idf-svc as this functionality was not
-            //exposed in Rust APIs. The alternative was to drop and recreate the EspHttpConnection
-            //on each station change which is inefficent.
-            //The reason for this is that 
-            //Unfortunately, Rust APIs don't currently consider the possbility that the HTTP response
-            //is an endless stream of data, and try to flush the old response on a new get request.
-            //So for us, it will block forever.
-            client.connection().modify_get_request(STATION_URLS[current_station]).unwrap();
-            let request = 
-            embedded_svc::http::client::Request::wrap(client.connection());
-
-            log::info!("-> GET {}", STATION_URLS[current_station]);
-            let response = request.submit().unwrap();
-
-            // Process response
-            let status = response.status();
-            //TODO: actually check if status is valid, and if not add retries? or just straight up panic?
-            //I think add say 5 retries, and then change station to next one, if total retries exceed 20 (4 stations)
-            //panic!
-            log::info!("Status is: {status}");
-
-            //MediaSourceStreamOptions has just 1 field: max buffer len which is by default 64kB.
-            //Unfortunately, that is the smallest allowed size.
-            //The MediaSourceStream has an internal ring buffer. 
-            //It reads from the source (our response), only when needed.
-            //When that happens, we read from the underlying HTTP stream.
-            let media_stream = MediaSourceStream::new(
-                Box::new(audio_stream::new_stream(response)), 
-                Default::default());
-
-
-            // Create a probe hint using the file's extension
-            let mut hint = Hint::new();
-            //TODO: some station urls can be like https://puma.streemlion.com:3130/stream .
-            //So *maybe* make a station struct that specifies the format for the hint.
-            //This is optional as it is ok for the hint to be wrong.
-
-            //Note it is ok for the hint to be wrong, and it seems like most stations are mp3.
-            hint.mime_type("audio/mpeg");
-            hint.with_extension("mp3");
-
-            let format_opts: FormatOptions = Default::default();
-            let metadata_opts: MetadataOptions = Default::default();
-            
-            //Create a probe which is used to automatically detect the media 
-            //format and instantiate a compatible FormatReader.
-            let mut probe_res = Box::new(
-                symphonia::default::get_probe()
-                .format(&hint, media_stream, &format_opts, &metadata_opts)
-                .expect("Format should be identifiable by the probe"));
-            
-            log::info!("The metadata is {:#?}", probe_res.format.metadata().skip_to_latest());
-            log::info!("Additional metadata is {:#?} and the tracks are {:#?}", 
-            probe_res.metadata.get(), probe_res.format.tracks());
-
-            let first_supported_track =  probe_res.format.tracks().iter()
-            .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
-            .expect("At least one track should be supported");
-
-            log::info!("the id of first supported track is {:#?} and the codec param are {:#?}", 
-            first_supported_track.id, first_supported_track.codec_params);
-
-            let track_id = first_supported_track.id;
-
-            /*We got (the other info was all None or Unknown). There was only 1 track and it was supported.
-                Track {
-                id: 0,
-                codec_params: CodecParameters {
-                    codec: CodecType(
-                        4099, //This is CODEC_TYPE_MP3
-                    ),
-                    sample_rate: Some(
-                        44100,
-                    ),
-                    time_base: Some(
-                        TimeBase {
-                            numer: 1,
-                            denom: 44100,
-                        },
-                    ),
-
-                This looks like CD quality: 16-bit/44.1 kHz is the recognized standard for audio CDs.
-            */
-            
-            //TODO: is this default sound or should we just panic?? I am not sure
-            //Our default sample rate if we can't find the actual value.
-            let mut sample_rate: u32 = 48000;
-            
-            if let Some(actual_sample_rate) = first_supported_track.codec_params.sample_rate {
-                
-                //TODO, add a check sample rate is <= 96KHZ
-                
-                //We can't reconfigure the driver using function. So we need to drop it and rebuild it.
-                log::info!("Found actual sample rate: {}", actual_sample_rate);
-                sample_rate = actual_sample_rate;
-            }
-
-
-            //Trying 24 bit depth. Can always use 16 bit depth (adjust speaker config in that case!)
-            let i2s_config = StdConfig::new(
-                            //7 DMA buffers, (note DMA_FRAMES_PER_BUFFER %3 == 0 as needed for 24 bit depth).
-                            //auto_clear = true means that there will be silence if we have no new data to send.
-                            //Note this acts as our jitter buffer!
-                i2s::config::Config::default().auto_clear(true)
-                .dma_buffer_count(7)
-                .frames_per_buffer(DMA_FRAMES_PER_BUFFER), //Maybe need to adjust this Config in partiuclar
-
-                i2s::config::StdClkConfig::from_sample_rate_hz(sample_rate)
-                .mclk_multiple(i2s::config::MclkMultiple::M384),
-                
-                i2s::config::StdSlotConfig::philips_slot_default(i2s::config::DataBitWidth::Bits24, 
-                    i2s::config::SlotMode::Stereo),
-                    
-                i2s::config::StdGpioConfig::default()
-                );
-
-            //IMPORTANT:
-            //Make sure to drop this driver before making a new GET request that needs a different bit-width or 
-            //sampling freq. We must drop this as the reconfig functions are not exposed to Rust from C.
-            let mut i2s_driver= 
-            I2sDriver::new_std_tx(&mut i2s0, &i2s_config, &mut bclk, &mut dout, mclk.as_mut(), &mut ws)
-            .unwrap();
-        
-            
-            //We want to preload data onto the I2S TX channel at least 1 DMA buffer in size
-            let mut preload = true; 
-            let mut preloaded_bytes= 0;
-
-
-            //Instantiate a decoder.
-            let decoder_options: symphonia::core::codecs::DecoderOptions = symphonia::core::codecs::DecoderOptions::default();
-            let mut decoder =              
-            symphonia::default::get_codecs()
-            .make(&first_supported_track.codec_params, &decoder_options)
-            .inspect_err(|_| 
-                log::error!("Please only select radio stations with symphonia supported codecs"))
-            .expect("Making a Decoder for a supported track should not fail");
-            
-
-            log::info!("Decoder set up");
-        
-            
-            let mut decoded_buf = None;
-
-            //Decode and write audio packets to I2S driver.
-            loop {
-                match probe_res.format.next_packet()
-                {
-                    Ok(packet) if packet.track_id() == track_id => {
-                        //Only read packets that belong to our selected track.
-
-                        match decoder.decode(&packet) {
-                            Ok(decoded_audio) => {
-                                
-                                //We will copy the decoded audio into a raw sample buffer in an
-                                // interleaved order. That will make decoded_buf be either some
-                                // buffer of bytes (in the correct ordering for I2S), or None.
-                
-                                if decoded_buf.is_none() {
-
-                                    // Get the audio buffer specification.
-                                    let spec = *decoded_audio.spec();
-
-                                    // Get the capacity of the decoded buffer. Note: This is capacity, not length!
-                                    let duration = decoded_audio.capacity() as u64;
-                                    
-                                    //We use i24 as I2S data should be signed.
-                                    //source: https://en.wikipedia.org/wiki/I%C2%B2S#:~:text=Data%20is%20signed%2C%20encoded%20as,required%20between%20transmitter%20and%20receiver.
-                                    decoded_buf = Some(RawSampleBuffer::<symphonia::core::sample::i24>::new(duration, spec));
-                                    
-                                    //Maybe need to clamp samples to valid range? 
-                                    //Actually, made irrelavant by copy_interleaved_ref below.
-
-                                    //No need if we are expecting the original bit depth to be less or equal
-                                    // (i.e. 16 or 24), which we do.
-                                    
-                                }
-
-                                // Copy the decoded audio buffer into the sample buffer in an interleaved format.
-                                // Note this performs any required conversions.
-                                if let Some(buf) = &mut decoded_buf {
-                                    buf.copy_interleaved_ref(decoded_audio);
-                                }
-                                
-                            }
-
-                            Err(symphonia_Error::DecodeError(_)) | Err(symphonia_Error::IoError(_)) => {continue;},
-
-                            Err(symphonia_Error::ResetRequired) => {
-
-                                //If ResetRequired is returned, consumers of the decoded audio data 
-                                //should expect the duration and SignalSpec of the decoded audio buffer to change.
-
-                                decoded_buf = None; 
-                                
-                                continue;
-                            }
-
-                            Err(err) => {panic!("{}", err);}
-                        }
-                    },
-                    Err(symphonia_Error::ResetRequired) => {
-                        // Restart Big loop (new get request with same value here I think)
-                        //
-                        // Or just do what it says: If ResetRequired is returned, 
-                        //then the track list must be re-examined and all Decoders re-created.
-                        //Add on Restart required error, to break out of this future with the current station number?
-                        //TODO: Decide what to do. Can also always move this whole thing into a seperate function.
-                        //Then on this error, we return from said function and do what it says.
-                        //Can also simply break here (which returns from this future).
-                        //In that case modify the select below. 
-                        
-                        
-                        //worst case just panic here and that restarts the entire program
-                        panic!("RESTRAT REQ -- handel this! ");
-                        todo!()
-                    },
-                    Err(err) => {panic!("{}", err);},
-                    Ok(_) => {continue;}
-                }
-
-
-                //Write the decoded_buf to the i2s TX channel.
-                match &mut decoded_buf {
-                    Some(buf) => {
-                        if preload {
-                            let data = buf.as_bytes();
-                            let new_loaded_bytes = i2s_driver.preload_data(data).unwrap();
-
-                            preloaded_bytes += new_loaded_bytes;
-
-                            //If we preloaded 1 DMA_BUFFER of audio data, start transmitting!
-                            if preloaded_bytes >= DMA_BUFFER_SIZE {
-                                preload = false;
-                                i2s_driver.tx_enable().unwrap();
-                                log::info!("Music start!")
-                            }
-
-                            //If we could not write all of this buf data into our DMA buffers
-                            // (because our DMA buffers are full, for instance from previous station audio;
-                            // or this buffer has more data than all of our DMA buffers).
-                            // Then after enabling transimitting, finish writing this buf data.
-                            if new_loaded_bytes < data.len() {
-
-                                //Note this will await if the DMA buffers are full!
-                                i2s_driver.write_all_async(&data[new_loaded_bytes..]).await.unwrap();
-
-                            }
-
-                        }
-                        else {
-                            i2s_driver.write_all_async(buf.as_bytes()).await.unwrap();
-                        }
-
-                        log::trace!("buffer decoded onto DMA!");
-                    },
-                    None => unreachable!(),
-                }
-
-
-
-            }
-        };
+        let stream = 
+        stream(raw_client, current_station, &mut i2s0, &mut bclk, &mut dout, &mut ws, &mut mclk);
 
         
         //Play the stream while polling the buttons. 
@@ -619,27 +308,7 @@ async fn main(spawner: Spawner) -> ! {
              {current_station = new_station_number},
         };
         
-        //TODO: see if we can make dynamic station work: just from codec params here
-        //propely configure the Speaker for I2S. 
-        //
-        //For espressif all they do is fixed parameter type stuff (they know bit rate and freq and
-        //encoding ahead of time).
-        // The alternative is that for every station we have a Station struct instance
-        //where we would specify the codec used, the bit rate, the frequency and anything else
-        //we would need to know to configure the speaker.
-
     };
-
- 
-
-    //TODO: 
-    //Add a task/future that blinks the RED led I think. In a doc comment point out
-    //that it is for the user to see the program has not crashed or bugged out or something.
-    //So if a certain station is not working, the user knows the problem is with the station,
-    //not the program.
-   
-    //Maybe preload some data to DMA before enabling transmit channel.
-    //I think I need to preload at least 1 DMA buffer length.
 
 }
 
@@ -719,6 +388,293 @@ adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gp
        
     }
 
+}
+
+
+///Stream the audio from an internet radio station.
+async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usize, i2s0: &mut i2s::I2S0, 
+ bclk: &mut Gpio9, dout: &mut Gpio8, ws: &mut Gpio45, mclk: &mut Option<Gpio16>)-> ! {
+
+    //SAFTEY:
+    //MediaSourceStream demands a 'static lifetime of everything involved in making it.
+    //This is fine as we always drop the media stream before we get back here.
+    //So there is always ever 1 single mut borrow of client active at any time
+    //and that borrow lasts as long as *actually* needed.
+    let client: &'static mut Client<EspHttpConnection> = unsafe {
+        &mut *raw_client
+    };
+
+
+    // Send request
+    //This GET request is equivalent to GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */* 
+    //let request = client.get( STATION_URLS[current_station]).unwrap();
+
+    //As we did a test get request earlier, we can just use this modify_get_request.
+    //We needed to make this function in a fork of esp-idf-svc as this functionality was not
+    //exposed in Rust APIs. The alternative was to drop and recreate the EspHttpConnection
+    //on each station change which is inefficent.
+    //The reason for this is that 
+    //Unfortunately, Rust APIs don't currently consider the possbility that the HTTP response
+    //is an endless stream of data, and try to flush the old response on a new get request.
+    //So for us, it will block forever.
+    client.connection().modify_get_request(STATION_URLS[current_station]).unwrap();
+    let request = 
+    embedded_svc::http::client::Request::wrap(client.connection());
+
+    log::info!("-> GET {}", STATION_URLS[current_station]);
+    let response = request.submit().unwrap();
+
+    // Process response
+    let status = response.status();
+    //TODO: actually check if status is valid, and if not add retries? or just straight up panic?
+    //I think add say 5 retries, and then change station to next one, if total retries exceed 20 (4 stations)
+    //panic!
+    log::info!("Status is: {status}");
+
+    //MediaSourceStreamOptions has just 1 field: max buffer len which is by default 64kB.
+    //Unfortunately, that is the smallest allowed size.
+    //The MediaSourceStream has an internal ring buffer. 
+    //It reads from the source (our response), only when needed.
+    //When that happens, we read from the underlying HTTP stream.
+    let media_stream = MediaSourceStream::new(
+        Box::new(audio_stream::new_stream(response)), 
+        Default::default());
+
+
+    // Create a probe hint using the file's extension
+    let mut hint = Hint::new();
+    //TODO: some station urls can be like https://puma.streemlion.com:3130/stream .
+    //So *maybe* make a station struct that specifies the format for the hint.
+    //This is optional as it is ok for the hint to be wrong.
+
+    //Note it is ok for the hint to be wrong, and it seems like most stations are mp3.
+    hint.mime_type("audio/mpeg");
+    hint.with_extension("mp3");
+
+    let format_opts: FormatOptions = Default::default();
+    let metadata_opts: MetadataOptions = Default::default();
+    
+    //Create a probe which is used to automatically detect the media 
+    //format and instantiate a compatible FormatReader.
+    let mut probe_res = Box::new(
+        symphonia::default::get_probe()
+        .format(&hint, media_stream, &format_opts, &metadata_opts)
+        .expect("Format should be identifiable by the probe"));
+    
+    log::info!("The metadata is {:#?}", probe_res.format.metadata().skip_to_latest());
+    log::info!("Additional metadata is {:#?} and the tracks are {:#?}", 
+    probe_res.metadata.get(), probe_res.format.tracks());
+
+    let first_supported_track =  probe_res.format.tracks().iter()
+    .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+    .expect("At least one track should be supported");
+
+    log::info!("the id of first supported track is {:#?} and the codec param are {:#?}", 
+    first_supported_track.id, first_supported_track.codec_params);
+
+    let track_id = first_supported_track.id;
+
+    /*We got (the other info was all None or Unknown). There was only 1 track and it was supported.
+        Track {
+        id: 0,
+        codec_params: CodecParameters {
+            codec: CodecType(
+                4099, //This is CODEC_TYPE_MP3
+            ),
+            sample_rate: Some(
+                44100,
+            ),
+            time_base: Some(
+                TimeBase {
+                    numer: 1,
+                    denom: 44100,
+                },
+            ),
+
+        This looks like CD quality: 16-bit/44.1 kHz is the recognized standard for audio CDs.
+    */
+    
+    //TODO: is this default sound or should we just panic?? I am not sure
+    //Our default sample rate if we can't find the actual value.
+    let mut sample_rate: u32 = 48000;
+    
+    if let Some(actual_sample_rate) = first_supported_track.codec_params.sample_rate {
+        
+        //TODO, add a check sample rate is <= 96KHZ
+        
+        //We can't reconfigure the driver using function. So we need to drop it and rebuild it.
+        log::info!("Found actual sample rate: {}", actual_sample_rate);
+        sample_rate = actual_sample_rate;
+    }
+
+
+    //Trying 24 bit depth. Can always use 16 bit depth (adjust speaker config in that case!)
+    let i2s_config = StdConfig::new(
+                    //7 DMA buffers, (note DMA_FRAMES_PER_BUFFER %3 == 0 as needed for 24 bit depth).
+                    //Once a DMA buffer is full, it will be sent to the speaker for us.
+                    //auto_clear = true means that there will be silence if we have no new data to send.
+                    //Note this acts as our jitter buffer!
+        i2s::config::Config::default().auto_clear(true)
+        .dma_buffer_count(7)
+        .frames_per_buffer(DMA_FRAMES_PER_BUFFER), //Maybe need to adjust this Config in partiuclar
+
+        i2s::config::StdClkConfig::from_sample_rate_hz(sample_rate)
+        .mclk_multiple(i2s::config::MclkMultiple::M384),
+        
+        i2s::config::StdSlotConfig::philips_slot_default(i2s::config::DataBitWidth::Bits24, 
+            i2s::config::SlotMode::Stereo),
+            
+        i2s::config::StdGpioConfig::default()
+        );
+
+    //IMPORTANT:
+    //Make sure to drop this driver before making a new GET request that needs a different bit-width or 
+    //sampling freq. We must drop this as the reconfig functions are not exposed to Rust from C.
+    let mut i2s_driver= 
+    I2sDriver::new_std_tx(i2s0, &i2s_config, bclk, dout, mclk.as_mut(), ws)
+    .unwrap();
+
+    
+    //We want to preload data onto the I2S TX channel at least 1 DMA buffer in size.
+    //This helps to ensure smooth playback.
+    let mut preload = true; 
+    let mut preloaded_bytes= 0;
+
+
+    //Instantiate a decoder.
+    let decoder_options: symphonia::core::codecs::DecoderOptions = symphonia::core::codecs::DecoderOptions::default();
+    let mut decoder =              
+    symphonia::default::get_codecs()
+    .make(&first_supported_track.codec_params, &decoder_options)
+    .inspect_err(|_| 
+        log::error!("Please only select radio stations with symphonia supported codecs"))
+    .expect("Making a Decoder for a supported track should not fail");
+    
+
+    log::info!("Decoder set up");
+
+    
+    let mut decoded_buf = None;
+
+    //Decode and write audio packets to I2S driver.
+    loop {
+        match probe_res.format.next_packet()
+        {
+            Ok(packet) if packet.track_id() == track_id => {
+                //Only read packets that belong to our selected track.
+
+                match decoder.decode(&packet) {
+                    Ok(decoded_audio) => {
+                        
+                        //We will copy the decoded audio into a raw sample buffer in an
+                        // interleaved order. That will make decoded_buf be either some
+                        // buffer of bytes (in the correct ordering for I2S), or None.
+        
+                        if decoded_buf.is_none() {
+
+                            // Get the audio buffer specification.
+                            let spec = *decoded_audio.spec();
+
+                            // Get the capacity of the decoded buffer. Note: This is capacity, not length!
+                            let duration = decoded_audio.capacity() as u64;
+                            
+                            //We use i24 as I2S data should be signed.
+                            //source: https://en.wikipedia.org/wiki/I%C2%B2S#:~:text=Data%20is%20signed%2C%20encoded%20as,required%20between%20transmitter%20and%20receiver.
+                            decoded_buf = Some(RawSampleBuffer::<symphonia::core::sample::i24>::new(duration, spec));
+                            
+                            //Maybe need to clamp samples to valid range? 
+                            //Actually, made irrelavant by copy_interleaved_ref below.
+
+                            //No need if we are expecting the original bit depth to be less or equal
+                            // (i.e. 16 or 24), which we do.
+                            
+                        }
+
+                        // Copy the decoded audio buffer into the sample buffer in an interleaved format.
+                        // Note this performs any required conversions.
+                        if let Some(buf) = &mut decoded_buf {
+                            buf.copy_interleaved_ref(decoded_audio);
+                        }
+                        
+                    }
+
+                    Err(symphonia_Error::DecodeError(_)) | Err(symphonia_Error::IoError(_)) => {continue;},
+
+                    Err(symphonia_Error::ResetRequired) => {
+
+                        //If ResetRequired is returned, consumers of the decoded audio data 
+                        //should expect the duration and SignalSpec of the decoded audio buffer to change.
+
+                        decoded_buf = None; 
+                        
+                        continue;
+                    }
+
+                    Err(err) => {panic!("{}", err);}
+                }
+            },
+            Err(symphonia_Error::ResetRequired) => {
+                // Restart Big loop (new get request with same value here I think)
+                //
+                // Or just do what it says: If ResetRequired is returned, 
+                //then the track list must be re-examined and all Decoders re-created.
+                //Add on Restart required error, to break out of this future with the current station number?
+                //TODO: Decide what to do. Can also always move this whole thing into a seperate function.
+                //Then on this error, we return from said function and do what it says.
+                //Can also simply break here (which returns from this future).
+                //In that case modify the select below. 
+                
+                
+                //worst case just panic here and that restarts the entire program
+                panic!("RESTRAT REQ -- handel this! ");
+                todo!()
+            },
+            Err(err) => {panic!("{}", err);},
+            Ok(_) => {continue;}
+        }
+
+
+        //Write the decoded_buf to the i2s TX channel.
+        match &mut decoded_buf {
+            Some(buf) => {
+                if preload {
+                    let data = buf.as_bytes();
+                    let new_loaded_bytes = i2s_driver.preload_data(data).unwrap();
+
+                    preloaded_bytes += new_loaded_bytes;
+
+                    //If we preloaded 1 DMA_BUFFER of audio data, start transmitting!
+                    if preloaded_bytes >= DMA_BUFFER_SIZE {
+                        preload = false;
+                        i2s_driver.tx_enable().unwrap();
+                        log::info!("Music start!")
+                    }
+
+                    //If we could not write all of this buf data into our DMA buffers
+                    // (because our DMA buffers are full, for instance from previous station audio;
+                    // or this buffer has more data than all of our DMA buffers).
+                    // Then after enabling transimitting, finish writing this buf data.
+                    if new_loaded_bytes < data.len() {
+
+                        //Note this will await if the DMA buffers are full!
+                        i2s_driver.write_all_async(&data[new_loaded_bytes..]).await.unwrap();
+
+                    }
+
+                }
+                else {
+                    i2s_driver.write_all_async(buf.as_bytes()).await.unwrap();
+                }
+
+                log::trace!("buffer decoded onto DMA!");
+            },
+            None => unreachable!(),
+        }
+
+
+
+    }
+       
 }
 
 
@@ -1167,7 +1123,7 @@ pub mod wifi {
 /// programmable digital filtering and Dynamic Range Compression in the DAC path (from the user guide).
 ///     
 ///* Ideally we want the device to work in its default clock mode (where we supply
-/// LRCK (Left/Right data alignment clock) and SCLK (Bit clock for synchronisation)). 
+/// LRCK (Left/Right data alignment clock) and SCLK (Bit clock for synchronisation; This is also sometimes called BCLK)). 
 /// This mode sets our MCU as the "master" for the I2S.
 /// 
 ///* I2S capable of up to 24 bits.
@@ -1307,7 +1263,8 @@ pub mod speaker {
         /// (that is you can set mclk = None for the I2S driver).
         /// 
         /// Note that the ratio between DAC internal clock and LRCK will be 
-        /// 384 for 24 bit audio depth and 256 for 16 bit audio depth.
+        /// 384 for 24 bit audio depth and 256 for 16 bit audio depth (this speaker will be configured
+        /// for 24 bit audio depth).
         pub fn build(i2c: I2C, pa_ctrl_pin: Gpio48) -> Self {
 
             let pa_ctrl_pin = PinDriver::output(pa_ctrl_pin).unwrap();
