@@ -138,13 +138,11 @@ async fn blink(mut led_driver: LedDriver<MutexDevice<'static, I2cDriver<'static>
 
 
 
-//We need to do this because otherwise Rust thinks that client drops before
+//Ensures our client does not drop before
 //our media_stream (which borrows the client mutablly). 
 static CLIENT: StaticCell<Client<EspHttpConnection>> = StaticCell::new();
 
-//Similar reason for this one.
 static I2C_GLOBAL: StaticCell<Mutex<I2cDriver<'static>>> = StaticCell::new();
-
 
 
 ///Our i2s driver uses DMA. This constant specifies how many audio frames we have in one DMA buffer.
@@ -409,8 +407,8 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
         //SAFTEY:
         //MediaSourceStream demands a 'static lifetime of everything involved in making it.
         //This is fine as we always drop the media stream before the stream function is called again.
-        //So there is always ever 1 single mut borrow of client active at any time
-        //and that borrow lasts as long as *actually* needed.
+        //So there is always ever 1 single mut borrow of client (which was placed in a static cell)
+        //active at any time, and that borrow lasts as long as *actually* needed.
         let client: &'static mut Client<EspHttpConnection> = unsafe {
             &mut *raw_client
         };
