@@ -10,7 +10,7 @@ use esp_idf_svc::{
             gpio::{Gpio16, Gpio45, Gpio8, Gpio9}, i2c::{I2cConfig, I2cDriver}, 
             i2s::{self, config::StdConfig, I2sDriver}, prelude::Peripherals
     },
-    http::client::EspHttpConnection,
+    http::{client::EspHttpConnection, status},
     timer::EspTaskTimerService,
 };
 
@@ -80,7 +80,7 @@ unsafe{
 
 
 
-
+//TODO: move into its own mod?
 const STATION_URLS: [&'static str;7] = 
 ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
 "https://puma.streemlion.com:3130/stream",
@@ -156,8 +156,8 @@ static I2C_GLOBAL: StaticCell<Mutex<I2cDriver<'static>>> = StaticCell::new();
 ///The bigger the better for performence ([source]).
 /// 
 ///for DMA_FRAMES_PER_BUFFER = 681:
-///This gives us at least 15ms of audio per DMA buffer (assuming we don't encounter
-///sample rates higher than 44.8Khz).
+///This gives us at least 14ms of audio per DMA buffer (assuming we don't encounter
+///sample rates higher than 48Khz).
 /// 
 ///[source]: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2s.html#data-transport
 const DMA_FRAMES_PER_BUFFER: u32 = 681;
@@ -168,6 +168,11 @@ const DMA_FRAMES_PER_BUFFER: u32 = 681;
 ///[source]: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/i2s.html#data-transport
 const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (24/8); // this is 4086.
 
+///The maximum number of retries to attempt if failing to connect to a given internet radio station.
+/// 
+/// After this amount of retries, the program panics.
+const RETRIES: usize = 5;
+
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
@@ -175,8 +180,11 @@ async fn main(spawner: Spawner) -> ! {
     //These are some *complie* time checks. 
     const { 
         assert!(DMA_BUFFER_SIZE <= 4092); //This is the max allowed size. See source in DMA_BUFFER_SIZE doc.
-        assert!(DMA_BUFFER_SIZE % 3 ==0); //Important for 24 bit audio depth
-        assert!(DMA_FRAMES_PER_BUFFER % 3 ==0); //Important for 24 bit audio depth
+        assert!(DMA_BUFFER_SIZE % 3 ==0); //Important for 24 bit-depth audio
+        assert!(DMA_FRAMES_PER_BUFFER % 3 ==0); //Important for 24 bit-depth audio
+
+        assert!(!STATION_URLS.is_empty());
+
     }
 
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -225,6 +233,7 @@ async fn main(spawner: Spawner) -> ! {
         };
     
     //Note we rely in the stream function on having done this here. This makes later code slightly more ergonomic.
+    //It also serves as a sanity check.
     wifi::test_get_request(&mut client).expect("wifi get request test should not fail");
 
     log::info!("Wifi should be set up. Blue led should stop blinking");
@@ -290,7 +299,7 @@ async fn main(spawner: Spawner) -> ! {
         //Update the station on the relevant button press.
         match select( stream,  poll_buttons).await
         {
-            embassy_futures::select::Either::First(_) => unreachable!(),
+            embassy_futures::select::Either::First(_) => (),
 
             embassy_futures::select::Either::Second(new_station_number) =>
              {current_station = new_station_number},
@@ -379,45 +388,61 @@ adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gp
 }
 
 
-///Stream the audio from an internet radio station.
+///Stream the audio from an internet radio station. 
+/// Returns on [symphonia_Error::ResetRequired]. 
+///
+/// ## Panics
+/// If connecting to the current_station fails RETRIES times, this panics.
+/// Also panics on other unrecoverable errors.
+/// 
 async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usize, i2s0: &mut i2s::I2S0, 
- bclk: &mut Gpio9, dout: &mut Gpio8, ws: &mut Gpio45, mclk: &mut Option<Gpio16>)-> ! {
+ bclk: &mut Gpio9, dout: &mut Gpio8, ws: &mut Gpio45, mclk: &mut Option<Gpio16>) {
 
-    //SAFTEY:
-    //MediaSourceStream demands a 'static lifetime of everything involved in making it.
-    //This is fine as we always drop the media stream before we get back here.
-    //So there is always ever 1 single mut borrow of client active at any time
-    //and that borrow lasts as long as *actually* needed.
-    let client: &'static mut Client<EspHttpConnection> = unsafe {
-        &mut *raw_client
+    //TODO: move this into its own function (that we call to get reponse)?
+    let mut connection_attempts = RETRIES + 1;
+    let response= loop {
+
+        if connection_attempts == 0 {
+            panic!("Failed to connect to {} with {} retries", STATION_URLS[current_station], RETRIES);
+        }
+
+        //SAFTEY:
+        //MediaSourceStream demands a 'static lifetime of everything involved in making it.
+        //This is fine as we always drop the media stream before the stream function is called again.
+        //So there is always ever 1 single mut borrow of client active at any time
+        //and that borrow lasts as long as *actually* needed.
+        let client: &'static mut Client<EspHttpConnection> = unsafe {
+            &mut *raw_client
+        };
+
+        //Send GET request
+        /*
+            As we did a test get request earlier, we can just use this modify_get_request.
+            We needed to make this function in a fork of esp-idf-svc as this functionality was not
+            exposed in Rust APIs. The alternative was to drop and recreate the EspHttpConnection
+            on each station change which is inefficent.
+
+            The problem with existing Rust APIs is that they don't consider the possbility that the HTTP response
+            is an endless stream of data, and try to flush the old response on a new get request.
+            So for us, it will block forever.
+        */
+        client.connection().modify_get_request(STATION_URLS[current_station]).unwrap();
+        let request = 
+        embedded_svc::http::client::Request::wrap(client.connection());
+
+        log::info!("-> GET {}", STATION_URLS[current_station]);
+        let response = request.submit().unwrap();
+
+        // Process response
+        let status = response.status();
+        log::info!("Status is: {status}");
+
+        if status::OK.contains(&status) {
+            break response;
+        }
+
+        connection_attempts -=1;
     };
-
-
-    // Send request
-    //This GET request is equivalent to GET /977_CLASSROCK.mp3 HTTP/1.1 Accept: */* 
-    //let request = client.get( STATION_URLS[current_station]).unwrap();
-
-    //As we did a test get request earlier, we can just use this modify_get_request.
-    //We needed to make this function in a fork of esp-idf-svc as this functionality was not
-    //exposed in Rust APIs. The alternative was to drop and recreate the EspHttpConnection
-    //on each station change which is inefficent.
-    //The reason for this is that 
-    //Unfortunately, Rust APIs don't currently consider the possbility that the HTTP response
-    //is an endless stream of data, and try to flush the old response on a new get request.
-    //So for us, it will block forever.
-    client.connection().modify_get_request(STATION_URLS[current_station]).unwrap();
-    let request = 
-    embedded_svc::http::client::Request::wrap(client.connection());
-
-    log::info!("-> GET {}", STATION_URLS[current_station]);
-    let response = request.submit().unwrap();
-
-    // Process response
-    let status = response.status();
-    //TODO: actually check if status is valid, and if not add retries? or just straight up panic?
-    //I think add say 5 retries, and then change station to next one, if total retries exceed 20 (4 stations)
-    //panic!
-    log::info!("Status is: {status}");
 
     //MediaSourceStreamOptions has just 1 field: max buffer len which is by default 64kB.
     //Unfortunately, that is the smallest allowed size.
@@ -429,13 +454,9 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
         Default::default());
 
 
-    // Create a probe hint using the file's extension
-    let mut hint = Hint::new();
-    //TODO: some station urls can be like https://puma.streemlion.com:3130/stream .
-    //So *maybe* make a station struct that specifies the format for the hint.
-    //This is optional as it is ok for the hint to be wrong.
-
+    // Create a probe hint.
     //Note it is ok for the hint to be wrong, and it seems like most stations are mp3.
+    let mut hint = Hint::new();
     hint.mime_type("audio/mpeg");
     hint.with_extension("mp3");
 
@@ -454,57 +475,38 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
     probe_res.metadata.get(), probe_res.format.tracks());
 
     let first_supported_track =  probe_res.format.tracks().iter()
-    .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
-    .expect("At least one track should be supported");
+    .find(|t| (t.codec_params.codec == symphonia::core::codecs::CODEC_TYPE_MP3) 
+        || (t.codec_params.codec == symphonia::core::codecs::CODEC_TYPE_AAC))
+    .ok_or_else(|| {
+        log::error!("Please only select radio stations with supported codecs (MP3 or AAC)");
+        Err::<&symphonia::core::formats::Track, _>("No Tracks with supported codecs found")
+    })
+    .expect("At least one track should have a supported codec");
 
     log::info!("the id of first supported track is {:#?} and the codec param are {:#?}", 
     first_supported_track.id, first_supported_track.codec_params);
 
-    let track_id = first_supported_track.id;
-
-    /*We got (the other info was all None or Unknown). There was only 1 track and it was supported.
-        Track {
-        id: 0,
-        codec_params: CodecParameters {
-            codec: CodecType(
-                4099, //This is CODEC_TYPE_MP3
-            ),
-            sample_rate: Some(
-                44100,
-            ),
-            time_base: Some(
-                TimeBase {
-                    numer: 1,
-                    denom: 44100,
-                },
-            ),
-
-        This looks like CD quality: 16-bit/44.1 kHz is the recognized standard for audio CDs.
-    */
     
-    //TODO: is this default sound or should we just panic?? I am not sure
-    //Our default sample rate if we can't find the actual value.
-    let mut sample_rate: u32 = 48000;
-    
-    if let Some(actual_sample_rate) = first_supported_track.codec_params.sample_rate {
-        
-        //TODO, add a check sample rate is <= 96KHZ
-        
-        //We can't reconfigure the driver using function. So we need to drop it and rebuild it.
-        log::info!("Found actual sample rate: {}", actual_sample_rate);
-        sample_rate = actual_sample_rate;
-    }
+    let sample_rate = 
+        if let Some(sample_rate) = first_supported_track.codec_params.sample_rate {
+            log::info!("Found sample rate: {}", sample_rate);
+            sample_rate
+        }
+        else {
+            panic!("Could not identify the sample rate")
+        };
 
 
-    //Trying 24 bit depth. Can always use 16 bit depth (adjust speaker config in that case!)
+    /*
+        We configured the speaker to use 24 bit-depth audio.
+        Once a DMA buffer is full, it will be sent to the speaker for us.
+        auto_clear = true means that there will be silence if we have no new data to send.
+        Note this acts as our jitter buffer for the audio.
+    */ 
     let i2s_config = StdConfig::new(
-                    //7 DMA buffers, (note DMA_FRAMES_PER_BUFFER %3 == 0 as needed for 24 bit depth).
-                    //Once a DMA buffer is full, it will be sent to the speaker for us.
-                    //auto_clear = true means that there will be silence if we have no new data to send.
-                    //Note this acts as our jitter buffer!
         i2s::config::Config::default().auto_clear(true)
         .dma_buffer_count(7)
-        .frames_per_buffer(DMA_FRAMES_PER_BUFFER), //Maybe need to adjust this Config in partiuclar
+        .frames_per_buffer(DMA_FRAMES_PER_BUFFER),
 
         i2s::config::StdClkConfig::from_sample_rate_hz(sample_rate)
         .mclk_multiple(i2s::config::MclkMultiple::M384),
@@ -515,9 +517,9 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
         i2s::config::StdGpioConfig::default()
         );
 
-    //IMPORTANT:
-    //Make sure to drop this driver before making a new GET request that needs a different bit-width or 
-    //sampling freq. We must drop this as the reconfig functions are not exposed to Rust from C.
+    
+    // We must drop and remake this driver for each stream,
+    // as the reconfig functions are not exposed to Rust from C.
     let mut i2s_driver= 
     I2sDriver::new_std_tx(i2s0, &i2s_config, bclk, dout, mclk.as_mut(), ws)
     .unwrap();
@@ -534,13 +536,12 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
     let mut decoder =              
     symphonia::default::get_codecs()
     .make(&first_supported_track.codec_params, &decoder_options)
-    .inspect_err(|_| 
-        log::error!("Please only select radio stations with symphonia supported codecs"))
     .expect("Making a Decoder for a supported track should not fail");
     
 
     log::info!("Decoder set up");
 
+    let track_id = first_supported_track.id;
     
     let mut decoded_buf = None;
 
@@ -563,18 +564,11 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
                             // Get the audio buffer specification.
                             let spec = *decoded_audio.spec();
 
-                            // Get the capacity of the decoded buffer. Note: This is capacity, not length!
+                            // Get the capacity of the decoded buffer. Note: This is capacity, not length.
                             let duration = decoded_audio.capacity() as u64;
                             
-                            //We use i24 as I2S data should be signed.
-                            //source: https://en.wikipedia.org/wiki/I%C2%B2S#:~:text=Data%20is%20signed%2C%20encoded%20as,required%20between%20transmitter%20and%20receiver.
+                            // We use i24 as I2S data should be signed.
                             decoded_buf = Some(RawSampleBuffer::<symphonia::core::sample::i24>::new(duration, spec));
-                            
-                            //Maybe need to clamp samples to valid range? 
-                            //Actually, made irrelavant by copy_interleaved_ref below.
-
-                            //No need if we are expecting the original bit depth to be less or equal
-                            // (i.e. 16 or 24), which we do.
                             
                         }
 
@@ -592,7 +586,6 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
 
                         //If ResetRequired is returned, consumers of the decoded audio data 
                         //should expect the duration and SignalSpec of the decoded audio buffer to change.
-
                         decoded_buf = None; 
                         
                         continue;
@@ -602,20 +595,11 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
                 }
             },
             Err(symphonia_Error::ResetRequired) => {
-                // Restart Big loop (new get request with same value here I think)
-                //
-                // Or just do what it says: If ResetRequired is returned, 
-                //then the track list must be re-examined and all Decoders re-created.
-                //Add on Restart required error, to break out of this future with the current station number?
-                //TODO: Decide what to do. Can also always move this whole thing into a seperate function.
-                //Then on this error, we return from said function and do what it says.
-                //Can also simply break here (which returns from this future).
-                //In that case modify the select below. 
-                
-                
-                //worst case just panic here and that restarts the entire program
-                panic!("RESTRAT REQ -- handel this! ");
-                todo!()
+                //If ResetRequired is returned, 
+                //then the track list must be re-examined and all decoders re-created
+                //(this involves redoing the GET request to get a new response).
+                //We can do this simply by returning from this function.
+                return;
             },
             Err(err) => {panic!("{}", err);},
             Ok(_) => {continue;}
@@ -638,10 +622,8 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
                         log::info!("Music start!")
                     }
 
-                    //If we could not write all of this buf data into our DMA buffers
-                    // (because our DMA buffers are full, for instance from previous station audio;
-                    // or this buffer has more data than all of our DMA buffers).
-                    // Then after enabling transimitting, finish writing this buf data.
+                    //If we could not write all of this buf data into our DMA buffers,
+                    // then after enabling transmitting, finish writing this buf data.
                     if new_loaded_bytes < data.len() {
 
                         //Note this will await if the DMA buffers are full!
@@ -658,8 +640,6 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
             },
             None => unreachable!(),
         }
-
-
 
     }
        
@@ -693,8 +673,6 @@ pub mod audio_stream {
                 .inner
                 .lock()
                 .expect("Only one thread/async task at a time should read the stream source");
-            //TODO: change to trace or get rid of the line below. Change log below back to trace
-            log::warn!("READING from Stream source now!");
 
             //TODO: maybe adjust this amount if needed. 
             //We sometimes can't handle reading max buf size that we will be given by Symphonia (32768 bytes!),
@@ -712,7 +690,7 @@ pub mod audio_stream {
             //Note that since the Mutex guarantees this thread to have exclusive access
             //to StreamSourceInner, we do not need to pay the additional performance cost of RefCell
             lock.inner.get_mut().read(buf)
-            .inspect(|read_bytes| log::warn!("read {} bytes!", read_bytes))
+            .inspect(|read_bytes| log::info!("Read {} bytes from stream source!", read_bytes))
             .map_err(|e| Error::other(e))
         }
     }
@@ -1520,7 +1498,7 @@ pub mod speaker {
 
 
         //REGISTER 0X04 – CLOCK MANAGER, DEFAULT 0001 0000 (sets DAC over sample rate)
-        //C stuff keeps it at the default value for 44.1KHZ and 44.8Khz (and for all higher sample rates)
+        //C stuff keeps it at the default value for 44.1KHZ and 48Khz (and for all higher sample rates)
         //My understanding is that the audio difference is likely not something you'll notice.
         //but maybe set it to 128 instead of 64 and see.
 
