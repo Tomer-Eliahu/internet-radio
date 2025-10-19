@@ -10,7 +10,7 @@ use esp_idf_svc::{
             gpio::{Gpio16, Gpio45, Gpio8, Gpio9}, i2c::{I2cConfig, I2cDriver}, 
             i2s::{self, config::StdConfig, I2sDriver}, prelude::Peripherals
     },
-    http::{client::EspHttpConnection, status},
+    http::{self, client::{self, EspHttpConnection}},
     timer::EspTaskTimerService,
 };
 
@@ -120,23 +120,6 @@ const STATION_URLS: [&'static str;7] =
 
 
 
-///Blink the red led forever. This is meant to indicate to the user the program has not crashed (is still running).
-/// This way, if a certain station is not working, the user knows the problem is with the station,
-///not the program.
-/// 
-/// Note this may hang a bit when switching between stations. The issue is that the GET requests are blocking
-/// as the async API has not been exposed to Rust yet. While we could use raw calls to the underlying C bindings
-/// to have an async connection, doing that just for this is not worth it.
-#[embassy_executor::task]
-async fn blink(mut led_driver: LedDriver<MutexDevice<'static, I2cDriver<'static>>>, 
-    mut led_async_timer: esp_idf_svc::timer::EspAsyncTimer) {
-    loop {
-        led_driver.flip_led(led::LEDs::Red);
-        led_async_timer.delay_ms(1000).await;
-    }
-}
-
-
 
 //Ensures our client does not drop before
 //our media_stream (which borrows the client mutablly). 
@@ -171,6 +154,9 @@ const DMA_BUFFER_SIZE: usize = DMA_FRAMES_PER_BUFFER as usize * 2 * (24/8); // t
 /// After this amount of retries, the program panics.
 const RETRIES: usize = 5;
 
+mod led;
+mod buttons;
+mod wifi;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
@@ -309,11 +295,17 @@ async fn main(spawner: Spawner) -> ! {
 
 
 ///Control the speaker hardware (not the I2S driver).
-/// Polls the buttons for presses and mutes/unmutes, inc/dec volume accordingly.
+/// Polls the buttons (which are connected to a single pin in a resistor ladder) 
+/// for presses and mutes/unmutes, inc/dec volume accordingly.
 /// On changing station (pressing the SET or REC button), returns the new station number.
 /// 
-/// **Note:** You might want to call [self::buttons::diagnose], 
+///### Notes
+///* You might want to call [buttons::diagnose][self::buttons::diagnose], 
 /// and make sure these values also correspond to your buttons.
+/// 
+///* Note that ADC2 is also used by the Wifi ([source]), so we use ADC1.
+/// 
+///[source]: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/adc_oneshot.html#hardware-limitations.
 async fn speaker_control<I2C: I2c>(speaker_controller: &mut SpeakerDriver<I2C>, current_station: usize,
 adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gpio5)-> usize {
 
@@ -325,8 +317,8 @@ adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gp
 
     let adc = AdcDriver::new(adc1).unwrap();
 
-    // Configuring pin to analog read, you can regulate the adc input voltage range depending on your need
-    // we use the attenuation of 11db which sets the input voltage range to around 0-3.1V on the esp32-S3.
+    // Configuring pin to analog read, you can regulate the adc input voltage range depending on your need.
+    // We use the attenuation of 11db which sets the input voltage range to around 0-3.1V on the esp32-S3.
     let config = AdcChannelConfig {
         attenuation: DB_11,
         ..Default::default()
@@ -396,51 +388,7 @@ adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gp
 async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usize, i2s0: &mut i2s::I2S0, 
  bclk: &mut Gpio9, dout: &mut Gpio8, ws: &mut Gpio45, mclk: &mut Option<Gpio16>) {
 
-    //TODO: move this into its own function (that we call to get reponse)?
-    let mut connection_attempts = RETRIES + 1;
-    let response= loop {
-
-        if connection_attempts == 0 {
-            panic!("Failed to connect to {} with {} retries", STATION_URLS[current_station], RETRIES);
-        }
-
-        //SAFTEY:
-        //MediaSourceStream demands a 'static lifetime of everything involved in making it.
-        //This is fine as we always drop the media stream before the stream function is called again.
-        //So there is always ever 1 single mut borrow of client (which was placed in a static cell)
-        //active at any time, and that borrow lasts as long as *actually* needed.
-        let client: &'static mut Client<EspHttpConnection> = unsafe {
-            &mut *raw_client
-        };
-
-        //Send GET request
-        /*
-            As we did a test get request earlier, we can just use this modify_get_request.
-            We needed to make this function in a fork of esp-idf-svc as this functionality was not
-            exposed in Rust APIs. The alternative was to drop and recreate the EspHttpConnection
-            on each station change which is inefficent.
-
-            The problem with existing Rust APIs is that they don't consider the possbility that the HTTP response
-            is an endless stream of data, and try to flush the old response on a new get request.
-            So for us, it will block forever.
-        */
-        client.connection().modify_get_request(STATION_URLS[current_station]).unwrap();
-        let request = 
-        embedded_svc::http::client::Request::wrap(client.connection());
-
-        log::info!("-> GET {}", STATION_URLS[current_station]);
-        let response = request.submit().unwrap();
-
-        // Process response
-        let status = response.status();
-        log::info!("Status is: {status}");
-
-        if status::OK.contains(&status) {
-            break response;
-        }
-
-        connection_attempts -=1;
-    };
+    let response = connect(raw_client, current_station);
 
     //MediaSourceStreamOptions has just 1 field: max buffer len which is by default 64kB.
     //Unfortunately, that is the smallest allowed size.
@@ -644,6 +592,77 @@ async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usi
 }
 
 
+///Connect to the internet radio station.
+fn connect(raw_client: *mut Client<EspHttpConnection>,  current_station: usize)-> 
+client::Response<&'static mut EspHttpConnection> {
+
+    let mut connection_attempts = RETRIES + 1;
+
+    loop {
+
+        if connection_attempts == 0 {
+            panic!("Failed to connect to {} with {} retries", STATION_URLS[current_station], RETRIES);
+        }
+
+        //SAFTEY:
+        //MediaSourceStream demands a 'static lifetime of everything involved in making it.
+        //This is fine as we always drop the media stream before the stream function is called again.
+        //So there is always ever 1 single mut borrow of client (which was placed in a static cell)
+        //active at any time, and that borrow lasts as long as *actually* needed.
+        let client: &'static mut Client<EspHttpConnection> = unsafe {
+            &mut *raw_client
+        };
+
+        //Send GET request
+        /*
+            As we did a test get request earlier, we can just use this modify_get_request.
+            We needed to make this function in a fork of esp-idf-svc as this functionality was not
+            exposed in Rust APIs. The alternative was to drop and recreate the EspHttpConnection
+            on each station change which is inefficent.
+
+            The problem with existing Rust APIs is that they don't consider the possbility that the HTTP response
+            is an endless stream of data, and try to flush the old response on a new get request.
+            So for us, it will block forever.
+        */
+        client.connection().modify_get_request(STATION_URLS[current_station]).unwrap();
+        let request = 
+        embedded_svc::http::client::Request::wrap(client.connection());
+
+        log::info!("-> GET {}", STATION_URLS[current_station]);
+        let response = request.submit().unwrap();
+
+        // Process response
+        let status = response.status();
+        log::info!("Status is: {status}");
+
+        if http::status::OK.contains(&status) {
+            return response;
+        }
+
+        connection_attempts -=1;
+    };
+
+}
+
+
+///Blink the red led forever. This is meant to indicate to the user the program has not crashed (is still running).
+/// This way, if a certain station is not working, the user knows the problem is with the station,
+///not the program.
+/// 
+/// Note this may hang a bit when switching between stations. The issue is that the GET requests are blocking
+/// as the async API has not been exposed to Rust yet. While we could use raw calls to the underlying C bindings
+/// to have an async connection, doing that just for this is not worth it.
+#[embassy_executor::task]
+async fn blink(mut led_driver: LedDriver<MutexDevice<'static, I2cDriver<'static>>>, 
+    mut led_async_timer: esp_idf_svc::timer::EspAsyncTimer) {
+    loop {
+        led_driver.flip_led(led::LEDs::Red);
+        led_async_timer.delay_ms(1000).await;
+    }
+}
+
+
+//CONTINUE
 pub mod audio_stream {
     use std::io::Error;
     use symphonia::core::io::ReadOnlySource;
@@ -713,355 +732,6 @@ pub mod audio_stream {
     ///raw_client: *mut esp_http_client
     unsafe impl<'a> Send for StreamSourceInner<'a> {}
     
-}
-
-
-///The LEDs are on the IO expander peripheral: [the TCA9554A](https://www.ti.com/product/TCA9554A).
-/// We therefore write a partial I2C driver for this device so we can easily work the LEDs.
-///
-/// Note that the device is reset to its default state by cycling the power supply and causing a power-on reset
-/// (from the data sheet). This means that once we flash a new program *and* cycle th power off then back on,
-/// we can see the device has reverted to its default state.
-pub mod led {
-    use embedded_hal::i2c::I2c;
-    use esp_idf_svc::hal::prelude::*;
-
-    ///Baudrate Max clock frequency in KHz (depending if using standard or fast mode).
-    pub const BAUDRATE_STANDARD: KiloHertz = KiloHertz(100);
-    pub const BAUDRATE_FAST: KiloHertz = KiloHertz(400);
-
-    //Note I2c has the following definition:
-    // pub trait I2c<A: AddressMode = SevenBitAddress>: ErrorType  {..}
-    // So we don't need to specify SevenBitAddress here.
-
-    /// Note that this Register enum is also all possibilites for the command byte
-    /// as it is only sent for *write* operations
-    /// (see 8.6.2 Control Register and Command Byte in the Data Sheet).
-    /// When sent to the IO expander after the addressing byte, this byte tells the IO expander
-    /// we wish to write to the corresponding register.
-    /// All these registers are 8-bit.
-    ///
-    /// If we wanted to read a register instead, we would simply use the
-    /// [write_read method](https://docs.rs/embedded-hal/latest/embedded_hal/i2c/trait.I2c.html#method.write_read)
-    /// which also matches the IO expander data sheet.
-    #[allow(unused)]
-    enum Register {
-        InputPort = 0,
-        OutputPort = 1,
-        PolarityInversion = 2,
-        Configuration = 3,
-    }
-
-    pub enum LEDs {
-        Red,
-        Blue,
-    }
-
-    pub struct LedDriver<I2C: I2c> {
-        i2c: I2C,
-
-        //Caching the state of the output port register is a convenience for flipping the LEDs.
-        //It saves us having to actually read it from the IO expander to know the state of the LEDs.
-        output_value: u8,
-    }
-
-    impl<I2C: I2c> LedDriver<I2C> {
-        //Associated Constants
-
-        ///From the [Korvo schematic]
-        /// the I2C Address (of this io expander)：0'b 0111 000x .
-        /// This address is specified in the **right-aligned** form as specified
-        /// [here](https://docs.rs/embedded-hal/latest/src/embedded_hal/i2c.rs.html#296).
-        ///
-        /// [Korvo schematic]: https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf
-        const ADDR: u8 = 0b00111000;
-
-        ///This is called P6 for the Korvo. On the IO expander it is pin 11.
-        /// Push-pull design structure.
-        const RED_LED_PIN_ON: u8 = 0b01_000000;
-        ///This is called P7 for the Korvo. On the IO expander it is pin 12.
-        /// Push-pull design structure.
-        const BLUE_LED_PIN_ON: u8 = 0b1_0000000;
-
-        ///The default value of the output port on power up.
-        const DEFAULT_OUTPUT: u8 = 0b11111111;
-
-        ///The byte in each register is of the form: P7 P6 P5 P4 P3 P2 P1 P0 (MSB -> LSB).
-        /// So to clear P6 and P7 in the configuration register (sets the LEDs as output)
-        /// we need to write this byte
-        const SET_LEDS_OUTPUT: u8 = 0b00111111;
-
-        ///Creates and initializes the LED driver.
-        pub fn build(mut i2c: I2C) -> Self {
-            //At power on, the IO expander device has all pins being inputs.
-            // We set the LED pins as outputs.
-            // We do this by clearing the relevant bits from the
-            //Configuration register (which starts with all bits set).
-            i2c.write(
-                Self::ADDR,
-                &[Register::Configuration as u8, Self::SET_LEDS_OUTPUT],
-            )
-            .expect("Setting LEDs as output should not fail");
-
-            //Once we enable the LEDs pins as outputs, their default values on power-up will turn them on.
-            //So we turn them off here.
-            //This also ensures that after a reset (but not a power cycle), 
-            //we would be in a consistent state.
-
-            let mut driver  = Self {
-                i2c,
-                output_value: Self::DEFAULT_OUTPUT,
-            };
-
-            driver.flip_led(LEDs::Red);
-            driver.flip_led(LEDs::Blue);
-
-            driver
-
-        }
-
-        ///Turn the led of choice on or off.
-        pub fn flip_led(&mut self, led: LEDs) {
-            match led {
-                LEDs::Red => {
-                    self.output_value ^= Self::RED_LED_PIN_ON;
-                }
-                LEDs::Blue => {
-                    self.output_value ^= Self::BLUE_LED_PIN_ON;
-                }
-            }
-
-            self.i2c
-                .write(Self::ADDR, &[Register::OutputPort as u8, self.output_value])
-                .expect("Flipping the LEDs should not fail");
-        }
-
-        ///Returns (is_Red_led_on, is_Blue_led_on)
-        pub fn get_led_states(&self) -> (bool, bool) {
-            (
-                (self.output_value & Self::RED_LED_PIN_ON) != 0,
-                (self.output_value & Self::BLUE_LED_PIN_ON) != 0,
-            )
-        }
-    }
-}
-
-///On the ESP32-S3-Korvo-2 V3.1 all buttons (Except the Boot and Reset buttons) share just 1 pin, the GPIO 5 pin.
-/// This is known as a resistor ladder. The schematic is on page 6
-/// [here](https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf).
-///
-/// Each button press creates a different, distinct voltage level that can be read by the microcontroller's ADC pin.
-/// The microcontroller measures the analog voltage and compares it to a predefined range of values (like the mid points
-/// in voltage between each 2 buttons).
-///Each range then corresponds to a specific button.
-/// For example, a reading between 0.0V and 0.5V could mean Button 1, while 1.0V to 1.5V means Button 2, and so on.
-///
-/// The con of this is that
-/// we cannot reliably detect multiple *simultaneous* button presses
-/// because the resulting voltage would be a combination of the individual button voltages.
-///
-/// REMEMBER TO IMPLEMENT DEBOUNCING!
-/// Debouncing: When a mechanical button is pressed or released,
-/// it can "bounce," creating multiple fast, spurious electrical signals. You must implement software debouncing
-/// (e.g., waiting a few milliseconds and re-reading the pin state) to ensure a single press is registered.
-///
-/// We want to record the voltage on the Pin (change the station: 
-/// use SET for station back and REC for station foward; stop (Mute key) and Play, 
-/// adjust the volume: Vol+ and Vol-).
-///
-///
-/// the esp std book used notifications, which only give the latest value, so if the interrupt is triggered multiple
-///times before the value of the notification is read, you will only be able to read the latest one.
-///Queues, on the other hand, allow receiving multiple values. See esp_idf_hal::task::queue::Queue for more details
-///
-///
-/// CRITICAL: Debouncing and noise filtering must also be handled in your code,
-/// as this is not provided by the hardware or esp-idf-hal in Rust.
-/// You can use multisampling (Take multiple ADC readings in quick succession and average them.
-/// This reduces the impact of random noise on any single reading
-/// and provides a more stable value for button detection)
-///
-/// Polling: we will periodically measure the adc input pin in (for instance) an embassy task.
-/// Or set up a timer interrupt to fire every 100ms or so to update a global atomic, to tell the main function
-/// it is time to poll the pin again.
-///This is the simplest way (we also get debouncing for "free" here). 
-/// It also is power efficent as we can go low power for the rest of the time 
-/// (the embassy exector goes low power for us automatically when the mcu has nothing to do).
-/// **[This is Espressif's approach to their own button component](https://docs.espressif.com/projects/esp-iot-solution/en/latest/input_device/button.html)**.
-/// **Final decision: I decided to go with this approach!!**.
-pub mod buttons {
-
-    //If going embassy polling approach:
-    //MAYBE By taking multiple readings a few milliseconds apart, 
-    //your polling routine can confirm a stable button press.
-    //I.E. use multisampling. This is what espressif does as well (with adc one shot mode)
-
-    use std::thread;
-    use std::time::Duration;
-
-    use esp_idf_svc::hal::{
-        adc::{
-            ADC1,
-            attenuation::DB_11,
-            oneshot::{config::AdcChannelConfig, *},
-        },
-        gpio::Gpio5,
-    };
-
-    ///Note that ADC2 is also used by the Wifi ([source]), so we use ADC1.
-    ///
-    ///[source]: https://docs.espressif.com/projects/esp-idf/en/v5.5.1/esp32s3/api-reference/peripherals/adc_oneshot.html#hardware-limitations.
-    ///
-    ///[schematic]: https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf
-    ///
-    /// Values I got from calling diagnose (these are different than the board [schematic]):
-    ///                 
-    /// No button presss: 3100
-    ///                 
-    /// Vol + about 320
-    ///                 
-    /// Vol - about 720
-    ///                 
-    /// Set about 990
-    ///                 
-    /// Play about 1500
-    ///                 
-    /// Mute about 1810
-    ///                 
-    /// Rec about 2210
-    pub fn diagnose(adc1: ADC1, gpio_pin: Gpio5) -> ! {
-        let adc = AdcDriver::new(adc1).unwrap();
-
-        // configuring pin to analog read, you can regulate the adc input voltage range depending on your need
-        // we use the attenuation of 11db which sets the input voltage range to around 0-3.1V on the esp32-S3.
-        let config = AdcChannelConfig {
-            attenuation: DB_11,
-            ..Default::default()
-        };
-
-        let mut adc_pin = AdcChannelDriver::new(&adc, gpio_pin, &config).unwrap();
-
-        loop {
-            // you can change the sleep duration depending on how often you want to sample
-            thread::sleep(Duration::from_millis(100));
-            //adc.read should *NOT* be called in ISR context. It returns the voltage of the pin.
-            log::info!("ADC value: {}", adc.read(&mut adc_pin).unwrap());
-        }
-    }
-}
-
-
-
-pub mod wifi {
-
-    use embedded_svc::{
-        http::{client::Client as HttpClient, Method},
-        wifi::{AuthMethod, ClientConfiguration, Configuration},
-    };
-
-    use esp_idf_svc::{
-        eventloop::EspSystemEventLoop, http::client::{Configuration as HttpConfiguration, EspHttpConnection}, 
-        io::{self, utils::try_read_full}, 
-        nvs::EspDefaultNvsPartition, sys::EspError, 
-        timer::EspTaskTimerService, wifi::{AsyncWifi, EspWifi}
-    };
-
-    pub mod config;
-
-    static WIFI: std::sync::Mutex<Option<AsyncWifi<EspWifi<'static>>>> = std::sync::Mutex::new(None);
-
-    pub async fn setup_wifi(modem: esp_idf_svc::hal::modem::Modem) -> Result<HttpClient<EspHttpConnection>, EspError>
-    {
-        let sys_loop = EspSystemEventLoop::take()?;
-        //It seems like nvs is needed to prevent a crash.
-        let nvs = EspDefaultNvsPartition::take()?;
-        let timer_service = EspTaskTimerService::new()?;
-
-        let mut wifi: AsyncWifi<EspWifi<'_>> = AsyncWifi::wrap(
-            EspWifi::new(modem, sys_loop.clone(), Some(nvs))?,
-            sys_loop,
-            timer_service
-        )?;
-
-        let wifi_configuration: Configuration = Configuration::Client(ClientConfiguration {
-            ssid: config::WIFI_NAME.try_into().unwrap(),
-            bssid: None,
-            auth_method: AuthMethod::WPA2Personal,
-            password: config::WIFI_PASSWORD.try_into().unwrap(),
-            channel: None,
-            ..Default::default()
-        });
-
-        wifi.set_configuration(&wifi_configuration)?;
-
-        wifi.start().await?;
-        log::info!("Wifi started");
-
-        wifi.connect().await?;
-        log::info!("Wifi connected");
-
-        wifi.wait_netif_up().await?;
-        log::info!("Wifi network interface up");
-
-        //We need to hold on to wifi (once it is dropped, it terminates).
-        {
-            *WIFI.lock().unwrap() = Some(wifi);
-        }
-        
-        // Create HTTPS client
-        let config = &HttpConfiguration {
-            crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
-            use_global_ca_store: true,
-            ..Default::default()
-        };
-        
-        //Async client not exposed to Rust (the async connection trait is not impl on EspHttpConnection)
-        let client = HttpClient::wrap(
-            EspHttpConnection::new(&config)?);
-
-        Ok(client)
-    }
-
-
-    //TODO REWRITE THE STUFF BELOW
-    /// Test sending an HTTP GET request.
-    pub fn test_get_request(client: &mut HttpClient<EspHttpConnection>) -> Result<(), io::EspIOError> {
-        // Prepare headers and URL
-        let headers = [("accept", "text/plain")];
-        let url = "http://ifconfig.net/";
-
-        // Send request
-        //
-        // Note: If you don't want to pass in any headers, you can also use `client.get(url, headers)`.
-        let request = client.request(Method::Get, url, &headers)?;
-        log::info!("-> GET {url}");
-        let mut response = request.submit()?;
-
-        // Process response
-        let status = response.status();
-        log::info!("<- {status}");
-        let mut buf = [0u8; 1024];
-
-
-        //This try_read_full calls an underlying function which Reads data from http stream.
-        //While an async version of this function exists, the necessary traits to call it
-        //are not implemented on any type so we can't use it.
-        let bytes_read = try_read_full(&mut response, &mut buf)
-        .map_err(|e| e.0)?;
-    
-        log::info!("Read {bytes_read} bytes");
-        match std::str::from_utf8(&buf[0..bytes_read]) {
-        Ok(body_string) => log::info!(
-                "Response body (truncated to {} bytes): {:?}",
-                buf.len(),
-                body_string
-            ),
-            Err(e) => log::error!("Error decoding response body: {e}"),
-        };
-
-        Ok(())
-    }
-
 }
 
 
