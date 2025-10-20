@@ -95,6 +95,7 @@ const STATION_URLS: [&'static str;7] =
 //
 //977_CLASSROCK is 70's Rock - HitsRadio (North Carolina, USA) (Has ads so maybe get rid?)
 //Also prone to timing out
+//(https://www.radio.net/s/hitsradio70srock)
 //
 //puma is Classic Rock Legends Radio (LA, CA, USA) (Mentions location) (audio/mpeg):
 // https://puma.streemlion.com:3130/stream
@@ -276,7 +277,9 @@ async fn main(spawner: Spawner) -> ! {
         //buttons::diagnose(adc1, adc_pin);
 
         let stream = 
-        stream(raw_client, current_station, &mut i2s0, &mut bclk, &mut dout, &mut ws, &mut mclk);
+        unsafe {
+            stream(raw_client, current_station, &mut i2s0, &mut bclk, &mut dout, &mut ws, &mut mclk)
+        };
 
         
         //Play the stream while polling the buttons. 
@@ -385,7 +388,10 @@ adc1: &mut esp_idf_svc::hal::adc::ADC1, adc_pin: &mut esp_idf_svc::hal::gpio::Gp
 /// If connecting to the current_station fails RETRIES times, this panics.
 /// Also panics on other unrecoverable errors.
 /// 
-async fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usize, i2s0: &mut i2s::I2S0, 
+/// ## Safety
+/// You must ensure that raw_client is a raw pointer to a Client which will *never* be invalidated.
+/// In other words, that it can be safely converted from a `*mut Client` into a `&'static mut Client`.
+async unsafe fn stream(raw_client: *mut Client<EspHttpConnection>, current_station: usize, i2s0: &mut i2s::I2S0, 
  bclk: &mut Gpio9, dout: &mut Gpio8, ws: &mut Gpio45, mclk: &mut Option<Gpio16>) {
 
     let response = connect(raw_client, current_station);
@@ -607,7 +613,7 @@ client::Response<&'static mut EspHttpConnection> {
         //SAFTEY:
         //MediaSourceStream demands a 'static lifetime of everything involved in making it.
         //This is fine as we always drop the media stream before the stream function is called again.
-        //So there is always ever 1 single mut borrow of client (which was placed in a static cell)
+        //So there is always ever 1 single mut borrow of Client (which was placed in a static cell)
         //active at any time, and that borrow lasts as long as *actually* needed.
         let client: &'static mut Client<EspHttpConnection> = unsafe {
             &mut *raw_client
@@ -662,51 +668,46 @@ async fn blink(mut led_driver: LedDriver<MutexDevice<'static, I2cDriver<'static>
 }
 
 
-//CONTINUE
-pub mod audio_stream {
+mod audio_stream {
     use std::io::Error;
     use symphonia::core::io::ReadOnlySource;
     use esp_idf_svc::http::client::{EspHttpConnection, Response};
-    use std::cell::RefCell;
     use std::sync::Mutex;
+
     /// A wrapper around the Response from the GET request.
     /// It implements std::io:Read by calling into the inner read which itself calls 
     /// the embedded::io::Read implementation on the underlying connection.
     /// This allows us to bridge the gap from the HTTPS Response to Symphonia's MediaSource.
     pub struct StreamSource<'a> {
-        //We wrap StreamSourceInner in a mutex because we needed the stream source
-        // to impl Sync as well so we would have
+        //We wrap StreamSourceInner in a mutex because we needed the StreamSource
+        //to impl Sync as well so we would have
         //impl<R: Read + Send + Sync> MediaSource for ReadOnlySource<R> as needed.
         inner: Mutex<StreamSourceInner<'a>>
     }
 
     struct StreamSourceInner<'a> {
-        inner: RefCell<Response<&'a mut EspHttpConnection>>
+        inner: Response<&'a mut EspHttpConnection>
     }
 
     impl std::io::Read for StreamSource<'_> {
         fn read(&mut self, mut buf: &mut [u8]) -> Result<usize, std::io::Error> {
-            let mut lock = self
-                .inner
-                .lock()
-                .expect("Only one thread/async task at a time should read the stream source");
-
-            //TODO: maybe adjust this amount if needed. 
-            //We sometimes can't handle reading max buf size that we will be given by Symphonia (32768 bytes!),
+            
+            //We sometimes can't handle reading the max buf size 
+            //that we will be given by Symphonia (32768 bytes!),
             //without a lag in audio playback.
-            //So we make sure to read at most half that. Then Symphonia will adjust the buffer it gives
-            //us to be that size from that point on.
-
-            //This is only needed for a particular mp3 stream it seems!
-            //Just for this one https://18063.live.streamtheworld.com/977_CLASSROCK.mp3
+            //So we make sure to read at most half that.
             let max_internal = 32768/2;
             if buf.len() > max_internal {
                 buf = &mut buf[..max_internal];
             }
-
-            //Note that since the Mutex guarantees this thread to have exclusive access
-            //to StreamSourceInner, we do not need to pay the additional performance cost of RefCell
-            lock.inner.get_mut().read(buf)
+            
+            //Note that get_mut() enables us to avoid paying the performance hit of using a Mutex.
+            self
+            .inner
+            .get_mut()
+            .unwrap()
+            .inner
+            .read(buf)
             .inspect(|read_bytes| log::info!("Read {} bytes from stream source!", read_bytes))
             .map_err(|e| Error::other(e))
         }
@@ -718,18 +719,17 @@ pub mod audio_stream {
     ) -> ReadOnlySource<StreamSource<'a>> {
         ReadOnlySource::new(StreamSource {
             inner: Mutex::new(StreamSourceInner {
-                inner: RefCell::new(response),
+                inner: response,
             }),
         })
     }
     
 
-    ///SAFTEY: We use a RefCell (which dynamically checkes the borrowing rules) 
-    /// to make sure we access the underlying HTTPS stream in a unique way.
-    /// This ensures this implementation of Send is sound.
+    ///SAFTEY: 
+    /// Note that the Response uniquely accesses the underlying HTTP stream.
     /// 
     /// We needed to implement this because EspHttpConnection has the following field:
-    ///raw_client: *mut esp_http_client
+    ///raw_client: *mut esp_http_client. 
     unsafe impl<'a> Send for StreamSourceInner<'a> {}
     
 }
