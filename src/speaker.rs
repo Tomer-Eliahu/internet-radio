@@ -69,6 +69,12 @@
 //! (we have driving it low be a part of [SpeakerDriver]'s drop implementation).
 //! 
 //! [Korvo schematics]: https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf
+//! 
+//! ## Additional Resources
+//! This [C implementation] was useful as a sanity check (we do deviate from it somewhat).
+//! 
+//! [C implementation]: https://github.com/espressif/esp-adf/tree/894a483eab7ef4868baa2865e7b16fca28b2b381/components/esp_codec_dev/device/es8311
+//! 
 
 
 
@@ -124,16 +130,17 @@ impl<I2C: I2c> SpeakerDriver<I2C>
     pub const I2C_ADDR: u8 = 0b00011_000;
 
 
-    ///Creates and initlizes the Speaker Driver.
-    /// This function initilizes the codec and also turns on the power amplifier (PA).
+    ///Create and initialize the Speaker Driver.
+    /// This function initializes the codec and also turns on the power amplifier (PA).
+    /// It then sets the volume to be `initial_vol`.
     /// 
     /// Note that SpeakerDriver does not rely on being passed MCLK as a reference 
     /// (that is you can set mclk = None for the I2S driver).
     /// 
     /// Note that the ratio between DAC internal clock and LRCK will be 
-    /// 384 for 24 bit audio depth and 256 for 16 bit audio depth (this speaker will be configured
-    /// for 24 bit audio depth).
-    pub fn build(i2c: I2C, pa_ctrl_pin: Gpio48) -> Self {
+    /// 384 for 24 bit depth audio and 256 for 16 bit depth audio (this speaker will be configured
+    /// for 24 bit depth audio).
+    pub fn build(i2c: I2C, pa_ctrl_pin: Gpio48, initial_vol: Volume) -> Self {
 
         let pa_ctrl_pin = PinDriver::output(pa_ctrl_pin).unwrap();
         let mut speaker_driver = Self{ i2c, pa_ctrl_pin, vol: Volume(0) };
@@ -157,7 +164,7 @@ impl<I2C: I2c> SpeakerDriver<I2C>
             assert_eq!(read_buf[0], Register::ChipID2.default(), 
             "MISTAKEN IDENTITY: expected this to be the codec");
 
-            log::warn!("SPEAKER IDENTIFIED");
+            log::info!("SPEAKER IDENTIFIED");
 
         }
 
@@ -170,10 +177,6 @@ impl<I2C: I2c> SpeakerDriver<I2C>
             &[Register::DacEqualizer as u8 , Register::DacEqualizer.default()]).unwrap();
 
         //We power up everything except ADC stuff
-
-        //TODO: C CODE JUST WRITES 0x1 into this (below values adjusted to keep ADC stuff powered down).
-        //Was 0b00110101 (TRY THIS AGAIN). IF THAT FAILS, I think try 0b00110001.
-        //Maye try 0b00110101 agian
         speaker_driver.i2c.write(Self::I2C_ADDR, 
             &[Register::SysPwrMgt as u8 , 0b00110101]).unwrap();
         
@@ -183,7 +186,7 @@ impl<I2C: I2c> SpeakerDriver<I2C>
 
         //Power up DAC
         speaker_driver.i2c.write(Self::I2C_ADDR, 
-            &[Register::SysEnableDac as u8 , 0]).unwrap();
+            &[Register::SysEnableDac as u8 , 0x1]).unwrap();
         
         //Enable speaker drive
         let write_in = const {Register::SysEnableSpeakerDrive.default() | (1<<4)};
@@ -199,7 +202,8 @@ impl<I2C: I2c> SpeakerDriver<I2C>
             mode: esp_idf_svc::sys::gpio_mode_t_GPIO_MODE_OUTPUT, 
             pull_up_en: esp_idf_svc::sys::gpio_pullup_t_GPIO_PULLUP_DISABLE,
             pull_down_en: esp_idf_svc::sys::gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
-            intr_type: esp_idf_svc::sys::gpio_int_type_t_GPIO_INTR_DISABLE};
+            intr_type: esp_idf_svc::sys::gpio_int_type_t_GPIO_INTR_DISABLE
+        };
 
         
         unsafe { 
@@ -212,14 +216,9 @@ impl<I2C: I2c> SpeakerDriver<I2C>
         //Power up the power amplifier
         speaker_driver.pa_ctrl_pin.set_high().unwrap();
 
-        //TODO: I don't think this is_set_high actually does anything
-        assert!(speaker_driver.pa_ctrl_pin.is_set_high(), "PA pin not set high. PA is off");
+        //Set the volume to the initial value
+        speaker_driver.set_vol(initial_vol);
 
-        //set the volume to 60% as an initial value
-        speaker_driver.set_vol(Volume::try_from(60).unwrap());
-
-        //TODO: maybe need to comment unmute out and try playing with software reset.
-        //maybe set all reset bits to 1 with poweron instead of power off.
         //For some reason, the reset procedure does not appear to effect this register.
         //So we make sure the speaker is unmuted.
         speaker_driver.unmute();
@@ -230,7 +229,7 @@ impl<I2C: I2c> SpeakerDriver<I2C>
 
 
 
-    /// From the [user guide]: 
+    /// From the [user guide] (page 18): 
     /// It is suggested that releasing a software reset operation to clear 
     /// the internal state while codec power up. 
     /// The following is proposal procedure of software reset operation: 
@@ -259,16 +258,30 @@ impl<I2C: I2c> SpeakerDriver<I2C>
 
 
     pub fn mute(&mut self) {
+        
+        let mut reg_value: [u8; 1] = [0];
+
+        self.i2c.write_read(Self::I2C_ADDR, 
+            &[Register::DacMute as u8], &mut reg_value).unwrap();
+
+        let write_in = reg_value[0] | 0b1110_0000;
 
         self.i2c.write(Self::I2C_ADDR, 
-            &[Register::DacMute as u8, 0b1110_0000]).unwrap();
+            &[Register::DacMute as u8, write_in]).unwrap();
 
     }
 
     pub fn unmute(&mut self) {
 
+        let mut reg_value: [u8; 1] = [0];
+
+        self.i2c.write_read(Self::I2C_ADDR, 
+            &[Register::DacMute as u8], &mut reg_value).unwrap();
+
+        let write_in = reg_value[0] & !(0b1110_0000);
+
         self.i2c.write(Self::I2C_ADDR, 
-            &[Register::DacMute as u8, 0]).unwrap();
+            &[Register::DacMute as u8, write_in]).unwrap();
 
     }
 
@@ -310,14 +323,6 @@ where I2C: I2c
 
 
 
-//TODO: Think if we should change all I2C writes except in software reset,
-//to first read the register value and then write it back with just the bits we needed to adjust
-//changed. That is if we should do read-modify-write operations instead of just writing.
-//I see the C code sometimes does this and sometimes just writes directly into registers (even ones
-//with internal reserved bits-- which I never write into).
-
-
-
 ///Registers (just the ones we need).
 /// 
 /// **Important:** bits are numbered starting from 0.
@@ -325,60 +330,61 @@ where I2C: I2c
 enum Register {
 
     ///The Reset register.
-    ///This register has default value: 0001 1111.
+    ///Has default value: 0b0001_1111.
     /// 
-    ///CSM_ON (bit 7) must be set to ‘1’ to start up state machine in normal mode (i.e turn on this codec), 
-    /// so we need to flip that bit.
-    ///See page 18 of the user guide for more info (we follow the power up and power down procedure
-    /// suggested there).
+    ///CSM_ON (bit 7) must be set to 1 to start up state machine in normal mode (i.e turn on this codec).
+    ///See page 18 of the user guide for more info 
+    /// (we follow the power up and power down procedure suggested there).
     Reset = 0,
 
     ///A clock manager register.
-    /// This register has default value of 0.
+    /// Has default value of 0.
     /// 
-    /// We want to write 10110101 into this register to use BCLK as source for raw_internal_master clock (before
+    /// We want to write 0b10110101 into this register to use BCLK as source for raw_internal_master_clock (before
     /// dividing and multiplying) and turn on the clocks we want (DAC).
-    /// The C code writes in 1011 1111 into this OR 0011 1111 When using MCLK as a reference.
     ClockManager = 0x1,
 
     ///This is another clock manager register. 
-    /// This register has a default value of 0.
+    /// Has a default value of 0.
     /// 
-    /// We simply use it to set MULT_PRE to all 1's. So we want to write 0001 1000 into this.
-    /// This means we will multiply the raw_internal_clock by 8. 
+    /// We simply use it to set MULT_PRE to all 1's. So we want to write 0b0001_1000 into this.
+    /// This means we will multiply the raw_internal_master_clock by 8. 
     /// Read the implementation notes of [speaker][self], to see why we do this.
     ClockFactors = 0x2,
     
     ///Power Management. See page 18 in the user guide for more info.
-    /// C stuff just writes 0x1 to here (enables everything an startups VMID in normal mode).
-    /// default 0b1111_1100.
+    /// Has default value: 0b1111_1100.
     SysPwrMgt = 0x0D,
 
-    //default 0000 0010 . The C code writes 0 to this (does *not* enable internal reference DAC circuit)
-    ///This register enables and disables the DAC. It has a default value of 0000 0010 (DAC powered down 
-    /// and internal reference circuits for DAC disabled).
-    /// We want to write 0 into this to power up the DAC.
+    ///This register enables and disables the DAC. 
+    /// It has a default value of 0b0000_0010 (DAC powered down 
+    /// and internal reference circuits for DAC output disabled).
+    /// We want to write 0x1 into this to power up the DAC and enable the reference circuits.
     SysEnableDac = 0x12,
 
-    ///The C code writes 0x10 i.e. 16 into this to enable heaphone drive.
-    /// Has default 0100 0000. 
-    /// We want to set bit 4 to 1 (has default 0), to enable output to HP (or speaker) drive.
+    ///This register sets whether we use line out drive output or headphone drive output.
+    /// Has default value of 0b0100_0000. 
+    /// We want to set bit 4 to 1 (has default 0), to enable HP (or speaker) drive output.
     SysEnableSpeakerDrive = 0x13,
 
-
+    ///Controls DAC mute/unmute.
     ///Write 1 to bits 5 to 7 inclusive to cleanly mute the DAC (according to the user guide page 29).
     /// Has default value of 0.
     DacMute = 0x31,
 
-    ///DAC_VOLUME is an 8-bit digital volume control for DAC 
-    /// with range from -95.5dB to +32dB in 0.5dB/step resolution.
-    ///used to control DAC volume. 
-    /// Default value of 0 which is -95.5dB. Max value 0xFF which corresponds to +32dB.
+    ///This register is an 8-bit digital volume control for the DAC. 
+    /// It ranges from -95.5dB to +32dB in 0.5dB step resolution.
+    /// 
+    /// Default value of 0 which is -95.5dB.
     DacVol = 0x32,
 
-    ///We want to bypass the DAC equalizer. Has default value of 0000 1000.
-    /// We want to write that default value into this register as the docs are a bit unclear.
-    /// It says it has this default value (so equalizer disabled by default), yet in the register
+    ///Controls the DAC equalizer bypass. 
+    /// Has default value of 0b0000_1000.
+    /// 
+    /// We want to bypass the DAC equalizer.
+    /// That means writing this default value into this register.
+    /// We do this as the docs are a bit unclear:
+    /// They say it has this default value (so equalizer disabled by default), yet in the register
     /// description it seems to say the DAC equalizer is enabled by default.
     DacEqualizer = 0x37,
 
@@ -389,40 +395,23 @@ enum Register {
     ChipID2 = 0xFE,
 
 
-    //I covered all registers that might also be needed in the notes below!
-
-
-
-    //-----------Maybe add--------------
-    //In C, they adjust the default of register 0x10  (ES8311_SYSTEM_REG10)
-    //to set  bits 2 and 3 to 1 as well
-    //(highest bias level). The rest of the register they keep the same as the default.
-
-
-    //REGISTER 0X04 – CLOCK MANAGER, DEFAULT 0001 0000 (sets DAC over sample rate)
-    //C stuff keeps it at the default value for 44.1KHZ and 48Khz (and for all higher sample rates)
-    //My understanding is that the audio difference is likely not something you'll notice.
-    //but maybe set it to 128 instead of 64 and see.
-
-    //The C code does this es8311_write_reg(codec, ES8311_GP_REG45, 0x00);
-    //It writes in the default value into this register. might be worth trying.
-
-
     //----- Currently not needed----------------
 
     //Serial Digital Port In
-    //bit 6 set to 1 mutes. Set to 0 (default) is unmute.
+    // Bit 6 set to 1 mutes. Set to 0 (default) is unmute.
     // The other default values mean 24 bit I2S, Left channel to DAC.
     // See page 12 of the user guide for more info.
-    // While this mute function should work, there is a cleaner way to do this, that does not result
-    // in artifact sounds.
-    //SdpIn = 0x09, NOT NEEDED
+    // While this mute function should work, there is a cleaner way to do this (DacMute register), 
+    // which does not result in artifact sounds.
+    //SdpIn = 0x09
 
 }
 
 impl Register {
 
-    ///Returns the default value of the entire register
+    //We do this instead of impl Default for Register, as that enables us to use a const function here.
+
+    ///Returns the default value of the register.
     const fn default(&self) -> u8 {
         match *self 
         {
@@ -437,5 +426,3 @@ impl Register {
         }
     }
 }
-
-

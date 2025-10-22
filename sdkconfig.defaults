@@ -41,6 +41,10 @@ CONFIG_FREERTOS_HZ=1000
 #TODO: comment this out (so the program restarts on an unexpected panic), after finishing this project. 
 CONFIG_ESP_SYSTEM_PANIC_GDBSTUB=y
 
+
+#
+# SPIRAM (PSRAM)
+#
 #The chip on the Krovo 2 V3.1: ESP32-S3-WROOM-1-N8R8, 8 MB QSPI flash, 8 MB Octal PSRAM.
 #We need to enable the additional PSRAM
 CONFIG_SPIRAM=y

@@ -238,7 +238,8 @@ async fn main(spawner: Spawner) -> ! {
     //Initilizes the speaker hardware (codec & power amplifier)
     let shared_i2c = MutexDevice::new(i2c);
     let pa_ctrl_pin= peripherals.pins.gpio48;
-    let mut speaker_controller = SpeakerDriver::build(shared_i2c, pa_ctrl_pin);
+    let mut speaker_controller = 
+    SpeakerDriver::build(shared_i2c, pa_ctrl_pin, Volume::try_from(60).unwrap());
 
     
     //We need the following for the I2S driver later. 

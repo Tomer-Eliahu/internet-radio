@@ -22,7 +22,6 @@ pub const BAUDRATE_FAST: KiloHertz = KiloHertz(400);
 /// (see 8.6.2 Control Register and Command Byte in the Data Sheet).
 /// When sent to the IO expander after the addressing byte, this byte tells the IO expander
 /// we wish to write to the corresponding register.
-/// All these registers are 8-bit.
 ///
 /// If we wanted to read a register instead, we would simply use the
 /// [I2c::write_read] method, which also matches the IO expander data sheet.
