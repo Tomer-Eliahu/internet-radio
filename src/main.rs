@@ -33,44 +33,6 @@ use static_cell::StaticCell;
 use crate::{buttons::diagnose, led::LedDriver, speaker::{Volume, SpeakerDriver}};
 
 
-//-------------------------------------------------------------------------------------
-
-
-/* TODO: this?
-    A better approach (if you just need to conditionally complie in log messages)
-    is to just adjust the log-level allowed for release builds by setting the cargo-feature you want.
-    see https://docs.rs/log/latest/log/#compile-time-filters .
-*/
-
-
-//-------------------------------------------------------------------------------------
-
-
-
-/* TODO: move this somewhere
-If you are interested in memory usage information you could do:
-
-#[allow(unused)]
-use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA};
-
-unsafe{
-    log::warn!("have {} largest free block size in bytes and total free heap mem is {}",
-    esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
-    esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
-    
-    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
-    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM
-    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
-
-    log::warn!("DMA mem is:");
-    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); //DMA
-}
-*/
-
-
-
-
-//TODO: move into its own mod?
 const STATION_URLS: [&'static str;7] = 
 ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
 "https://puma.streemlion.com:3130/stream",
@@ -80,36 +42,6 @@ const STATION_URLS: [&'static str;7] =
 "https://streamer.radio.co/s52d0fa340/listen",
 "https://stream.radiowavenz.com/stream",
 ];
-
-//Mentions location simply means says name of station/ talks in a way that is identifiable
-//
-//977_CLASSROCK is 70's Rock - HitsRadio (North Carolina, USA) (Has ads so maybe get rid?)
-//Also prone to timing out
-//(https://www.radio.net/s/hitsradio70srock)
-//
-//puma is Classic Rock Legends Radio (LA, CA, USA) (Mentions location) (audio/mpeg):
-// https://puma.streemlion.com:3130/stream
-// (https://www.radio.net/s/classicrocklegends)
-//
-//Smooth Radio London (mentions location):  https://media-ice.musicradio.com/SmoothLondonMP3
-//(https://www.radio.net/s/smoothradiolondon)
-//
-//OzInDi Radio Australia (mentions location): https://streamer.radio.co/s52d0fa340/listen
-//THIS IS audio/aac it is aac!
-//(from https://www.radio.net/s/ozindiradio)
-//
-//Radiowave NZ (mentions location): https://stream.radiowavenz.com/stream (audio/mpeg)
-//(from https://www.radio.net/s/radiowave-nz)
-//Another NZ station (also audio/mpeg), this one is from TuneIN instead of radio.net:
-//https://stream.kixfm.co.nz:8178/stream
-//
-//CKUA (Alberta, Canada) (audio/aac) (mentions location): https://ais-sa1.streamon.fm/7000_48k.aac
-//Note it is actually 44.1KHz. (from https://www.radio.net/s/ckua).
-//
-//Timewarp Ireland (mentions location): https://broadcast.shoutstream.co.uk:8052/stream (audio/mpeg)
-//(from https://www.radio.net/s/timewarpireland)
-
-
 
 
 //Ensures our client does not drop before
