@@ -10,7 +10,11 @@ Transform your [ESP32-S3-Korvo-2 V3.1 board][board] into an internet radio!
 
 ## Demo Video
 
+On YouTube:
+
 [![Demo Video](https://img.youtube.com/vi/jrRanWGJ3ZQ/0.jpg)](https://www.youtube.com/watch?v=jrRanWGJ3ZQ)
+
+There is also a 720p copy of this video [under the media folder](https://github.com/Tomer-Eliahu/internet-radio/blob/main/media/Demo_Video_720p.mp4).
 
 ## Design Decisions
 
