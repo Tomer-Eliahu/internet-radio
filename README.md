@@ -5,10 +5,12 @@ Transform your [ESP32-S3-Korvo-2 V3.1 board][board] into an internet radio!
 
 * If you want to run or adjust this program, please see the [usage guide](usage_guide.md).
 
+* Please note that the SET button on the board is used as "station back". Similarly, the REC button is used as "station forward".
+
 
 ## Demo Video
 
-
+[![Demo Video](https://img.youtube.com/vi/jrRanWGJ3ZQ/0.jpg)](https://www.youtube.com/watch?v=jrRanWGJ3ZQ)
 
 ## Design Decisions
 

@@ -9,7 +9,7 @@ Browse for your wanted station. Then on its webpage, right click -> click 'inspe
 There you should see one or more items (there is more than one due to redirects). The one that grows in size as the station plays will have the final stream URL. Click on that and the station's stream URL will be listed under "Request URL" header.
 
 Here is an example:
-<img src="images\Example_Station.png" />
+<img src="media\Example_Station.png" />
 
 
 The other field to pay attention to is "Content-Type". Make sure it is either audio/mpeg or audio/aac. Note that audio/aacp is AAC-Plus or HE-AAC (High Efficiency AAC) and is not supported.
