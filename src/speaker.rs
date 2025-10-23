@@ -194,6 +194,12 @@ impl<I2C: I2c> SpeakerDriver<I2C>
         speaker_driver.i2c.write(Self::I2C_ADDR, 
             &[Register::SysEnableSpeakerDrive as u8 , write_in]).unwrap();
         
+        //Set the volume to the initial value
+        speaker_driver.set_vol(initial_vol);
+
+        //For some reason, the reset procedure does not appear to affect this register.
+        //So we make sure the speaker is unmuted.
+        speaker_driver.unmute();
 
         //This is the correct config for pa_ctrl_pin (gpio 48).
         //Unfortunately, there doesn't appear to be a way to set this as the config in a more idomatic way.
@@ -205,7 +211,6 @@ impl<I2C: I2c> SpeakerDriver<I2C>
             intr_type: esp_idf_svc::sys::gpio_int_type_t_GPIO_INTR_DISABLE
         };
 
-        
         unsafe { 
             //Set up the correct config.
             esp_idf_svc::sys::esp!(esp_idf_svc::sys::gpio_config(&raw_config)).unwrap();
@@ -213,15 +218,8 @@ impl<I2C: I2c> SpeakerDriver<I2C>
         
         log::info!("GPIO 48 should be correctly configured now");
 
-        //Power up the power amplifier
+        //Finally, power up the power amplifier.
         speaker_driver.pa_ctrl_pin.set_high().unwrap();
-
-        //Set the volume to the initial value
-        speaker_driver.set_vol(initial_vol);
-
-        //For some reason, the reset procedure does not appear to effect this register.
-        //So we make sure the speaker is unmuted.
-        speaker_driver.unmute();
 
         //The speaker driver is all set!
         speaker_driver
@@ -311,12 +309,12 @@ where I2C: I2c
 {
     fn drop(&mut self) {
 
+        //Power down the PA.
+        self.pa_ctrl_pin.set_low().unwrap();
+
         //reset everything and power down. Minimizes power consumption.
         self.i2c.write(Self::I2C_ADDR, 
             &[Register::Reset as u8, Register::Reset.default()]).unwrap();
-
-        //Power down the PA.
-        self.pa_ctrl_pin.set_low().unwrap();
 
     }
 }

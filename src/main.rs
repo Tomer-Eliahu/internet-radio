@@ -564,15 +564,20 @@ client::Response<&'static mut EspHttpConnection> {
         embedded_svc::http::client::Request::wrap(client.connection());
 
         log::info!("-> GET {}", STATION_URLS[current_station]);
-        let response = request.submit().unwrap();
+        
+        if let Ok(response) = request.submit() 
+        {
+            // Process response
+            let status = response.status();
+            log::info!("Status is: {status}");
 
-        // Process response
-        let status = response.status();
-        log::info!("Status is: {status}");
-
-        if http::status::OK.contains(&status) {
-            return response;
+            if http::status::OK.contains(&status) {
+                return response;
+            }
+ 
         }
+
+        log::warn!("Failed to connect, retrying now");
 
         connection_attempts -=1;
     };
