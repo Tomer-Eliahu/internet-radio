@@ -11,7 +11,7 @@ name = "internet-radio"
 harness = false # do not use the built in cargo test harness -> resolve rust-analyzer errors
 
 [profile.release]
-opt-level = "s" # My note: maybe modify (or remove). 
+opt-level = "s" # My note: maybe modify. 
 # from my template maybe also add
 # codegen-units = 1 # better optimizations
 # lto = true # better optimizations
@@ -31,13 +31,13 @@ embedded-svc = "0.28.1"
 embedded-hal = "1.0.0"
 
 
-# Note: for me using embassy-time-driver here + embassy-time crate never worked.
-# Luckily, with Embassy we can provide our time instead. So we use the EspTaskTimerService instead.
-# So we are only using Embasssy for the exector + some utils.
-#Note that we needed to add "experimental" just so that our fork will complie.
+# Note: for me, using embassy-time-driver here + embassy-time crate never worked.
+# Luckily, with Embassy we can provide our time: We use the EspTaskTimerService instead.
+# So, we are only using Embassy for the executor + some utils.
+# Note that we needed to add "experimental" just so that our fork will compile.
 esp-idf-svc = { version = "0.51", features = ["embassy-sync", "critical-section", "experimental"] }
 
-embassy-executor = { version = "0.9.1", features = ["executor-thread", "arch-std",] }
+embassy-executor = { version = "0.9.1", features = ["executor-thread", "arch-std"] }
 
 embassy-sync = { version = "0.7.2" }
 embassy-futures = "0.1.2"
@@ -46,51 +46,16 @@ embassy-futures = "0.1.2"
 embedded-hal-async = "1.0.0"
 embedded-io-async = "0.6.1"
 embedded-io = "0.6.1"
-#symphonia = {version = "0.5.4", features = ["all"]}
-#I think just keep these features for symphonia ["aac", "mp3", "pcm", "all-formats"] (THIS worked for mp3).
-#OR try for symphonia with all features (I only saw aac and mp3 used and aacp which is unsupported so 
-#I am not sure if this is worth it)
-symphonia = {version = "0.5.4", default-features = false, features = ["aac", "mp3", "pcm", "all-formats"]}
-static_cell = "2.1.1"
 embedded-hal-bus = {version= "0.3.0", features =["alloc", "std"]}
 
 
-#We needed to fork symphonia and replace LazyStatic 
-#with std::LazyLock::new(||  Box::new( ..stuff..)) 
-#This makes Rust reserve 1 usize per such static as opposed to the 356152 bytes.
-#Because this data is uninitilized it gets placed in DRAM (which is part of internal RAM: we only have 512KB)
+symphonia = {version = "0.5.4", default-features = false, features = ["aac", "mp3", "pcm", "all-formats"]}
+static_cell = "2.1.1"
+
+
 [patch.crates-io]
 symphonia = {git = "https://github.com/Tomer-Eliahu/Symphonia.git", rev = "a160aaa78d65bd9af3df3f6e47d0ca2551caba4a" }
-
 esp-idf-svc = {git = "https://github.com/Tomer-Eliahu/esp-idf-svc.git", rev = "0591e5e989cadca5f35863024199cfd44c3f3970"}
-
-
-
-# ---------------------------------------------------------------------------------------------
-
-#esp-idf-svc = { version = "0.51", features = ["embassy-time-driver", "embassy-sync"] }
-#critical-section = { version = "1.2", features = ["std"], default-features = false }
-# embassy-time = { version = "0.5" }
-
-
-# --- Optional Embassy Integration ---
-# esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
-
-# If you enable embassy-time-driver, you MUST also add one of:
-
-# a) Standalone Embassy libs ( embassy-time, embassy-sync etc) with a foreign async runtime:
-# embassy-time = { version = "0.4.0", features = ["generic-queue-8"] } # NOTE: any generic-queue variant will work
-
-# b) With embassy-executor:
-# embassy-executor = { version = "0.7", features = ["executor-thread", "arch-std"] }
-
-# NOTE: if you use embassy-time with embassy-executor you don't need the generic-queue-8 feature
-
-# --- Temporary workaround for embassy-executor < 0.8 ---
-# esp-idf-svc = { version = "0.51", features = ["embassy-time-driver", "embassy-sync"] }
-# critical-section = { version = "1.1", features = ["std"], default-features = false }
-
-# ---------------------------------------------------------------------------------------------
 
 
 [build-dependencies]

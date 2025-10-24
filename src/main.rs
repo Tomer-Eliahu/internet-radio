@@ -123,8 +123,10 @@ async fn main(spawner: Spawner) -> ! {
     let i2c: Mutex<I2cDriver<'static>>  = Mutex::new(I2cDriver::new(i2c, sda, scl, &config).unwrap());
     let i2c = I2C_GLOBAL.init(i2c);
 
-    //Note we share an i2c bus with mutliple devices (the IO expander for LED control and also 
-    //the codec to control the speaker later). However, since we only use 1 device at a time this is fine.
+    //Note we share an i2c bus with multiple device drivers (the IO expander for LED control and 
+    //the codec to control the speaker later). 
+    //Note that since we can use at most 1 device at a time this mutex will never block 
+    //(because Embassy here utilizes a single core).
     let shared_i2c  = MutexDevice::new(i2c);
     let mut led_driver  = LedDriver::build(shared_i2c);
 

@@ -1,11 +1,10 @@
-# Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=120000
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8000
 
 CONFIG_FREERTOS_ISR_STACKSIZE=8000
 #https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-freertos-isr-stacksize
 
-#TODO: disable CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY for perf. later.
+#Can disable CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY for performance.
 CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
 CONFIG_ESP_SYSTEM_HW_STACK_GUARD=y
 
@@ -14,7 +13,6 @@ CONFIG_ESP_IPC_TASK_STACK_SIZE=8000
 
 CONFIG_ESP_TIMER_TASK_STACK_SIZE=10000
 #https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-esp-timer-task-stack-size
-# Range from 2048 to 65536 Default value: 3584
 
 CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=20000
 #https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/kconfig-reference.html#config-lwip-tcpip-task-stack-size
@@ -36,17 +34,15 @@ CONFIG_FREERTOS_HZ=1000
 #CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
 #CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=n
 
-#After building and flashing, when a panic occurs, the MCU will pause execution. You can then use 
-#idf-monitor and GDB to inspect registers, local variables, and memory to find the root cause of the panic.
-#TODO: comment this out (so the program restarts on an unexpected panic), after finishing this project. 
+# When a panic occurs, the MCU will pause execution (instead of restarting).
 CONFIG_ESP_SYSTEM_PANIC_GDBSTUB=y
 
 
 #
 # SPIRAM (PSRAM)
 #
-#The chip on the Krovo 2 V3.1: ESP32-S3-WROOM-1-N8R8, 8 MB QSPI flash, 8 MB Octal PSRAM.
-#We need to enable the additional PSRAM
+# The chip on the Korvo 2 V3.1: ESP32-S3-WROOM-1-N8R8, 8 MB QSPI flash, 8 MB Octal PSRAM.
+# We need to enable the additional PSRAM.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_TYPE_AUTO=y
 CONFIG_SPIRAM_MODE_OCT=y
@@ -63,49 +59,41 @@ CONFIG_SPIRAM_BOOT_HW_INIT=y
 CONFIG_SPIRAM_ECC_ENABLE=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
-#Allocate everything big possible on PSRAM instead of internal RAM (we want as much as possible for DMA)
+# Allocate everything big possible on PSRAM instead of internal RAM 
+# (we want as much internal RAM as possible for DMA).
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=200
 
-#CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=60000 #This has no actual impact. It is better if we don't use it.
-#Might be needed for DMA.
-#The MALLOC_CAP_DMA and MALLOC_CAP_INTERNAL flags can be used to allocate memory from this pool.
-#See more here https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/external-ram.html#provide-external-ram-via-malloc
+#CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=60000 # This has no actual impact. It is better if we don't use it.
+
 
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY=y
 
-#PSARM resources: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/kconfig-reference.html#esp-psram
-
 #CONFIG_SPIRAM_MEMTEST=y -- already runs for us
-#CONFIG_ESP_PANIC_HANDLER_IRAM=y
+
+#PSRAM resources: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/kconfig-reference.html#esp-psram
+# https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/external-ram.html#provide-external-ram-via-malloc
 
 
-
-#CONFIG_ESP_INT_WDT_TIMEOUT_MS=10000
-#CONFIG_ESP_INT_WDT_TIMEOUT_MS up to 10000
-#CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
-#max is 60 for task timeout
-
-
-
+#
 # Wi-Fi
 #
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=25
-#25 is the max. Each of these buffers is about 1.6KB. So 25*16= 40KB. We make reads 32KB in size at a time.
+# 25 is the max. Each of these buffers is about 1.6KB. So 25*1.6= 40KB.
 
 CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=5
-#Instead of the default 16. We pass these "saved" buffers into CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM instead.
-#And other uses of DMA memory.
+# Instead of the default 16. We pass these "saved" buffers into CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM instead
+# and other uses of DMA memory.
 
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=128
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
 
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
-#32 is the max for the BA_WIN
+
+# 32 is the max for the BA_WIN
 CONFIG_ESP_WIFI_TX_BA_WIN=32
 CONFIG_ESP_WIFI_RX_BA_WIN=32 
-#BA_WIN shpuld be min(2*static_buffer_num, dynamic_buffer_num)
 
 
 #
@@ -113,8 +101,8 @@ CONFIG_ESP_WIFI_RX_BA_WIN=32
 #
 #CONFIG_LWIP_WND_SCALE=y
 
-#Note these are the max sizes we have for sure as the TCP window scaling option which enables higher values
-#must be supported by both us and the transmitting radio station, so we can't rely on that.
+# Note these are the max sizes we have for sure as the TCP window scaling option which enables higher values
+# must be supported by both us and the transmitting radio station, so we can't rely on that.
 #CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
 CONFIG_LWIP_TCP_WND_DEFAULT=65534
 
@@ -122,13 +110,13 @@ CONFIG_LWIP_TCP_WND_DEFAULT=65534
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 
-#UDP max is 64
+# UDP max is 64
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 
 
 #CONFIG_LWIP_L2_TO_L3_COPY=y
 
-#Extra optimizations (These take DMA memory and don't seem critical)
+# Extra optimizations (These take DMA memory and don't seem critical)
 #CONFIG_LWIP_IRAM_OPTIMIZATION=y
 #CONFIG_LWIP_EXTRA_IRAM_OPTIMIZATION=y
 
@@ -136,8 +124,8 @@ CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 #
 # MBEDTLS
 #
-#Allocate all required MBEDTLS dynamic allocations from SPIRAM (PSRAM) instead of DRAM
+# Allocate all required MBEDTLS dynamic allocations from external SPIRAM (PSRAM) instead of internal DRAM
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
-#Maybe also try (best not if not needed)
+# Maybe also try (best not if not needed)
 #CONFIG_MBEDTLS_DYNAMIC_BUFFER
