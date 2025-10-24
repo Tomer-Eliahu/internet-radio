@@ -1,4 +1,4 @@
-# Usage Guide
+# User Guide
 To run this program on your own board, first install all necessary tools as detailed in the [Rust on ESP book](https://docs.espressif.com/projects/rust/book/) and the [Embedded Rust (std) on Espressif book](https://docs.esp-rs.org/std-training/02_2_software.html) if you have not done so already. Then go to [example_config.rs](src\wifi\example_config.rs) and set your Wi-Fi settings. Be sure to rename this file "config.rs" once you are done.
 
 ## Find New Stations

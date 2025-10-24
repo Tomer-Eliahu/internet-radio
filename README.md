@@ -3,7 +3,7 @@ Transform your [ESP32-S3-Korvo-2 V3.1 board][board] into an internet radio!
 
 * Supports a mix of stations using either MP3 or AAC codec.
 
-* If you want to run or adjust this program, please see the [usage guide](usage_guide.md).
+* If you want to run or adjust this program, please see the [user guide](user_guide.md).
 
 * Please note that the SET button on the board is used as "station back". Similarly, the REC button is used as "station forward".
 
