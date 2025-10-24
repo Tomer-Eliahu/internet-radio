@@ -58,7 +58,7 @@ pub async fn setup_wifi(
     }
 
     // Create HTTPS client
-    let config = &HttpConfiguration {
+    let config = HttpConfiguration {
         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
         use_global_ca_store: true,
         ..Default::default()

@@ -5,9 +5,9 @@
 //! 
 //! - [The data sheet](https://www.lcsc.com/datasheet/C962342.pdf).
 //! - [The extended data sheet](https://www.lcdwiki.com/res/PublicFile/ES8311_DS.pdf) 
-//! (this includes register descriptions).
+//!   (this includes register descriptions).
 //! - There is a lot more information in the 
-//! [user guide](https://files.waveshare.com/wiki/common/ES8311.user.Guide.pdf).
+//!   [user guide](https://files.waveshare.com/wiki/common/ES8311.user.Guide.pdf).
 //! 
 //! We can completely configure this device using I2C.
 //! 
@@ -18,16 +18,15 @@
 //! - I2S capable of up to 24 bits.
 //! 
 //! - The ratio between internal DAC clock and LRCK must be equal or greater than 256, 
-//! and this ratio must be integral multiple of sixteen.
+//!   and this ratio must be integral multiple of sixteen.
 //! 
 //! - We can increase/decrease volume and even mute using this device.
 //! 
 //! - The DAC is also capable of DSP/PCM mode serial audio data format instead of I2S. 
-//! With this mode we can use 32-bit depth (but there is no *audible* benefit of using that).
+//!   With this mode we can use 32-bit depth (but there is no *audible* benefit of using that).
 //! 
 //! - We can enable the Dynamic Range Control (a.k.a. Dynamic Range Compression) feature of the DAC, 
-//! but since we are using it to listen to music here,
-//! we will leave it disabled.
+//!   but since we are using it to listen to music here, we will leave it disabled.
 //! 
 //! - The DAC has an equalizer, but we are not going to use it.
 //! 
@@ -46,9 +45,10 @@
 //! ([see wiki](https://en.wikipedia.org/wiki/I%C2%B2S)).
 //! 
 //! This means for 16-bit depth audio: 
-//! - DAC internal clock freq = sample_rate * 2 * 16 * 8 = 256 * sample_rate = 256 * LRCK .
+//!     - DAC internal clock freq = sample_rate * 2 * 16 * 8 = 256 * sample_rate = 256 * LRCK .
+//! 
 //! And for 24-bit depth audio:
-//! - DAC internal clock freq = sample_rate * 2 * 24 * 8 = 384 * sample_rate = 384 * LRCK .
+//!     - DAC internal clock freq = sample_rate * 2 * 24 * 8 = 384 * sample_rate = 384 * LRCK .
 //! 
 //! So this approach sets ideal ratios for each bit depth, and it is completely sample rate agnositc!
 //! 
@@ -127,7 +127,7 @@ impl<I2C: I2c> SpeakerDriver<I2C>
     /// [here](https://docs.rs/embedded-hal/latest/src/embedded_hal/i2c.rs.html#296).
     ///
     /// [Korvo schematic]: https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-Korvo-2_V3.1.2_20240116.pdf 
-    pub const I2C_ADDR: u8 = 0b00011_000;
+    pub const I2C_ADDR: u8 = 0b00011000;
 
 
     ///Create and initialize the Speaker Driver.
@@ -355,9 +355,10 @@ enum Register {
     SysPwrMgt = 0x0D,
 
     ///This register enables and disables the DAC. 
-    /// It has a default value of 0b0000_0010 (DAC powered down 
-    /// and internal reference circuits for DAC output disabled).
-    /// We want to write 0x1 into this to power up the DAC and enable the reference circuits.
+    /// It has a default value of 0b0000_0010: DAC powered down 
+    /// and internal reference circuits for DAC output disabled.
+    /// We want to write 0x1 into this to power up the DAC and enable the reference circuits 
+    /// (to increase the accuracy of the conversion).
     SysEnableDac = 0x12,
 
     ///This register sets whether we use line out drive output or headphone drive output.

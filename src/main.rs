@@ -33,7 +33,7 @@ use static_cell::StaticCell;
 use crate::{buttons::diagnose, led::LedDriver, speaker::{Volume, SpeakerDriver}};
 
 
-const STATION_URLS: [&'static str;7] = 
+const STATION_URLS: [&str;7] = 
 ["https://18063.live.streamtheworld.com/977_CLASSROCK.mp3",
 "https://puma.streemlion.com:3130/stream",
 "https://ais-sa1.streamon.fm/7000_48k.aac",
@@ -153,9 +153,8 @@ async fn main(spawner: Spawner) -> ! {
 
     //The Blue light could be off at this time. Thus we switch it on if need be.
     //This indicates to the user the wifi is all set.
-    match led_driver.get_led_states() {
-        (_, false) => led_driver.flip_led(led::LEDs::Blue),
-        _ => ()
+    if let (_, false) = led_driver.get_led_states() {
+        led_driver.flip_led(led::LEDs::Blue);
     };
 
     
@@ -233,7 +232,7 @@ async fn main(spawner: Spawner) -> ! {
 /// 
 ///### Notes
 ///* You might want to call [buttons::diagnose][self::buttons::diagnose], 
-/// and make sure these values also correspond to your buttons.
+///  and make sure these values also correspond to your buttons.
 /// 
 ///* Note that ADC2 is also used by the Wifi ([source]), so we use ADC1.
 /// 
@@ -643,7 +642,7 @@ mod audio_stream {
             .inner
             .read(buf)
             .inspect(|read_bytes| log::info!("Read {} bytes from stream source!", read_bytes))
-            .map_err(|e| Error::other(e))
+            .map_err(Error::other)
         }
     }
 
