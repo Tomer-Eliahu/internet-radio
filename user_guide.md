@@ -1,5 +1,5 @@
 # User Guide
-To run this program on your own board, first install all necessary tools as detailed in the [Rust on ESP book](https://docs.espressif.com/projects/rust/book/) and the [Embedded Rust (std) on Espressif book](https://docs.esp-rs.org/std-training/02_2_software.html) if you have not done so already. Then go to [example_config.rs](src\wifi\example_config.rs) and set your Wi-Fi settings. Be sure to rename this file "config.rs" once you are done.
+To run this program on your own board, first install all necessary tools as detailed in the [Rust on ESP book](https://docs.espressif.com/projects/rust/book/) and the [Embedded Rust (std) on Espressif book](https://docs.esp-rs.org/std-training/02_2_software.html) if you have not done so already. Then go to [example_config.rs] and set your Wi-Fi settings. Be sure to rename "example_config.rs" to "config.rs" once you are done.
 
 ## Find New Stations
 I took stations from [radio.net](https://www.radio.net/), but there are also alternative sources such as
@@ -15,7 +15,7 @@ Here is an example:
 The other field to pay attention to is "Content-Type". Make sure it is either audio/mpeg or audio/aac. Note that audio/aacp is AAC-Plus or HE-AAC (High Efficiency AAC) and is not supported.
 
 ## Set the Stations
-In [main.rs](src\main.rs), adjust `STATION_URLS`. 
+In [main.rs], adjust `STATION_URLS`. 
 
 ### Preloaded Stations 
 One of the nice things about internet radio vs regular radio is that you can listen to stations from all over world! This program comes with the following stations:
@@ -50,3 +50,6 @@ unsafe{
     esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); // DMA
 }
 ```
+
+[example_config.rs]: https://github.com/Tomer-Eliahu/internet-radio/blob/main/src/wifi/example_config.rs
+[main.rs]: https://github.com/Tomer-Eliahu/internet-radio/blob/main/src/main.rs

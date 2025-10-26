@@ -1,4 +1,4 @@
-//Be sure to rename this file to just config.rs once you change the info below
+//Be sure to rename this file to config.rs once you change the info below
 
 use embedded_svc::wifi::AuthMethod;
 
