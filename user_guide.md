@@ -29,3 +29,24 @@ One of the nice things about internet radio vs regular radio is that you can lis
 | [Timewarp Ireland](https://www.radio.net/s/timewarpireland) | [link](https://broadcast.shoutstream.co.uk:8052/stream) | MP3 |
 | [OzInDi Radio Australia](https://www.radio.net/s/ozindiradio) | [link](https://streamer.radio.co/s52d0fa340/listen) | AAC |
 | [Radiowave NZ](https://www.radio.net/s/radiowave-nz) | [link](https://stream.radiowavenz.com/stream) | MP3 |
+
+## Memory Usage
+
+If you are interested in memory usage information you can add the following:
+
+```rust
+use esp_idf_svc::sys::{MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA};
+
+unsafe{
+    log::warn!("Have {} largest free block size in bytes and total free heap mem is {}",
+    esp_idf_svc::sys::heap_caps_get_largest_free_block(MALLOC_CAP_8BIT as _),
+    esp_idf_svc::sys::heap_caps_get_free_size(MALLOC_CAP_8BIT as _));
+    
+    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_8BIT as _);    // DRAM
+    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_SPIRAM as _);  // PSRAM
+    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_EXEC as _);    // IRAM
+
+    log::warn!("DMA mem is:");
+    esp_idf_svc::sys::heap_caps_print_heap_info(MALLOC_CAP_DMA as _); // DMA
+}
+```
