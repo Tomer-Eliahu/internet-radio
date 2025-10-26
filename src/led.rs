@@ -17,7 +17,7 @@ pub const BAUDRATE_FAST: KiloHertz = KiloHertz(400);
 // pub trait I2c<A: AddressMode = SevenBitAddress>: ErrorType  {..}
 // So we don't need to specify SevenBitAddress here.
 
-/// Note that this Register enum is also all possibilites for the command byte
+/// Note that this Register enum is also all possibilities for the command byte
 /// as it is only sent for *write* operations
 /// (see 8.6.2 Control Register and Command Byte in the Data Sheet).
 /// When sent to the IO expander after the addressing byte, this byte tells the IO expander

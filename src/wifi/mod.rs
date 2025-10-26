@@ -17,7 +17,7 @@ mod config;
 
 static WIFI: std::sync::Mutex<Option<AsyncWifi<EspWifi<'static>>>> = std::sync::Mutex::new(None);
 
-///Sets up the wifi and returns an HTTPS client.
+///Sets up the Wi-Fi and returns an HTTPS client.
 pub async fn setup_wifi(
     modem: esp_idf_svc::hal::modem::Modem,
 ) -> Result<HttpClient<EspHttpConnection>, EspError> {

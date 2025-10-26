@@ -45,7 +45,7 @@ const STATION_URLS: [&str;7] =
 
 
 //Ensures our client does not drop before
-//our media_stream (which borrows the client mutablly). 
+//our media_stream (which borrows the client mutably). 
 static CLIENT: StaticCell<Client<EspHttpConnection>> = StaticCell::new();
 
 static I2C_GLOBAL: StaticCell<Mutex<I2cDriver<'static>>> = StaticCell::new();
@@ -57,7 +57,7 @@ static I2C_GLOBAL: StaticCell<Mutex<I2cDriver<'static>>> = StaticCell::new();
 /// 
 ///interrupt_interval(unit: sec) = DMA_FRAMES_PER_BUFFER / sample_rate 
 /// (this is relevant for sending audio with i2s as well).
-///The bigger the better for performence ([source]).
+///The bigger the better for performance ([source]).
 /// 
 ///for DMA_FRAMES_PER_BUFFER = 681:
 ///This gives us at least 14ms of audio per DMA buffer (assuming we don't encounter
@@ -83,7 +83,7 @@ mod speaker;
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
 
-    //These are some *complie* time checks. 
+    //These are some *compile* time checks. 
     const { 
         assert!(DMA_BUFFER_SIZE <= 4092); //This is the max allowed size. See source in DMA_BUFFER_SIZE doc.
         assert!(DMA_BUFFER_SIZE % 3 ==0); //Important for 24 bit-depth audio
@@ -168,7 +168,7 @@ async fn main(spawner: Spawner) -> ! {
     let client = CLIENT.init(client);
     let mut current_station: usize = 0;
 
-    //Initilizes the speaker hardware (codec & power amplifier)
+    //Initializes the speaker hardware (codec & power amplifier)
     let shared_i2c = MutexDevice::new(i2c);
     let pa_ctrl_pin= peripherals.pins.gpio48;
     let mut speaker_controller = 
@@ -554,9 +554,9 @@ client::Response<&'static mut EspHttpConnection> {
             As we did a test get request earlier, we can just use this modify_get_request.
             We needed to make this function in a fork of esp-idf-svc as this functionality was not
             exposed in Rust APIs. The alternative was to drop and recreate the EspHttpConnection
-            on each station change which is inefficent.
+            on each station change which is inefficient.
 
-            The problem with existing Rust APIs is that they don't consider the possbility that the HTTP response
+            The problem with existing Rust APIs is that they don't consider the possibility that the HTTP response
             is an endless stream of data, and try to flush the old response on a new get request.
             So for us, it will block forever.
         */

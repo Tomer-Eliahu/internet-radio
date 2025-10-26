@@ -28,7 +28,7 @@ use esp_idf_svc::hal::{
 ///
 ///Note that ADC2 is also used by the Wifi ([source]), so we use ADC1.
 ///
-/// Values I got from calling diagnose (these are different than the board [schematic]):
+/// Values I got from calling this function (these are different than the board [schematic]):
 ///                 
 /// No button presss: 3100
 ///                 

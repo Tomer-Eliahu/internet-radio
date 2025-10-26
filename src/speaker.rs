@@ -50,7 +50,7 @@
 //! And for 24-bit depth audio:
 //!     - DAC internal clock freq = sample_rate * 2 * 24 * 8 = 384 * sample_rate = 384 * LRCK .
 //! 
-//! So this approach sets ideal ratios for each bit depth, and it is completely sample rate agnositc!
+//! So this approach sets ideal ratios for each bit depth, and it is completely sample rate agnostic!
 //! 
 //! Note that we must have internal_DAC_CLOCK_freq. <= 35 MHz (from the user guide page 15) if DVDD is 3.3V 
 //! (which is the case for us).
@@ -64,7 +64,7 @@
 //! 
 //! ESP_IO48 is connected to PA_CTRL (from [Korvo schematics]).
 //! We use this to power up this power amplifier.
-//! PA_CTRL is to make power consumption more efficent (draw lower power when on standby).
+//! PA_CTRL is used to make power consumption more efficient (draw lower power when on standby).
 //! So we want to drive this pin high (i.e. on) before use, and drive it low post use 
 //! (we have driving it low be a part of [SpeakerDriver]'s drop implementation).
 //! 
@@ -202,7 +202,7 @@ impl<I2C: I2c> SpeakerDriver<I2C>
         speaker_driver.unmute();
 
         //This is the correct config for pa_ctrl_pin (gpio 48).
-        //Unfortunately, there doesn't appear to be a way to set this as the config in a more idomatic way.
+        //Unfortunately, there doesn't appear to be a way to set this as the config in a more idiomatic way.
         let raw_config = esp_idf_svc::sys::gpio_config_t { 
             pin_bit_mask: (1u64 << 48), 
             mode: esp_idf_svc::sys::gpio_mode_t_GPIO_MODE_OUTPUT, 
@@ -330,7 +330,7 @@ enum Register {
     ///The Reset register.
     ///Has default value: 0b0001_1111.
     /// 
-    ///CSM_ON (bit 7) must be set to 1 to start up state machine in normal mode (i.e turn on this codec).
+    ///CSM_ON (bit 7) must be set to 1 to start up state machine in normal mode (i.e. turn on this codec).
     ///See page 18 of the user guide for more info 
     /// (we follow the power up and power down procedure suggested there).
     Reset = 0,
