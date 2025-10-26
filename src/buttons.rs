@@ -17,9 +17,9 @@ use std::time::Duration;
 
 use esp_idf_svc::hal::{
     adc::{
+        ADC1,
         attenuation::DB_11,
         oneshot::{config::AdcChannelConfig, *},
-        ADC1,
     },
     gpio::Gpio5,
 };
