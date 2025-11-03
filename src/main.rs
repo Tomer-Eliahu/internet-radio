@@ -134,7 +134,7 @@ const STATION_URLS: [&'static str;12] =
 
 //Same 44.1kHz FLAC 16 bit NAIM JAZZ
 "https://mscp3.live-streams.nl:8342/jazz-flac.flac",
-//Radio Paradise 44.1kHz FLAC 16 bit
+//BDPST Rock 44.1kHz FLAC 16 bit
 "https://s2.audiostream.hu/bdpstrock_FLAC",
 
 //48kHz 95bFM
@@ -173,7 +173,7 @@ const STATION_URLS: [&'static str;12] =
 //(from https://www.radio.net/s/timewarpireland)
 
 
-
+const DMA_BUFFER_COUNT: usize = 5;
 
 //We need to do this because otherwise Rust thinks that client drops before
 //our media_stream (which borrows the client mutablly). 
@@ -563,7 +563,7 @@ async fn main(_spawner: Spawner) -> ! {
                             //auto_clear = true means that there will be silence if we have no new data to send.
                             //Note this acts as our jitter buffer!
                 i2s::config::Config::default().auto_clear(true)
-                .dma_buffer_count(7)
+                .dma_buffer_count(DMA_BUFFER_COUNT as u32)
                 .frames_per_buffer(DMA_FRAMES_PER_BUFFER), //Maybe need to adjust this Config in partiuclar
 
                 i2s::config::StdClkConfig::from_sample_rate_hz(sample_rate)
@@ -722,7 +722,7 @@ async fn main(_spawner: Spawner) -> ! {
                             preloaded_bytes += new_loaded_bytes;
 
                             //If we preloaded 1 DMA_BUFFER of audio data, start transmitting!
-                            if preloaded_bytes >= 6*DMA_BUFFER_SIZE {
+                            if preloaded_bytes >=  (DMA_BUFFER_COUNT-1) *DMA_BUFFER_SIZE {
                                 preload = false;
                                 i2s_driver.tx_enable().unwrap();
                                 log::info!("Music start!")
@@ -920,7 +920,7 @@ pub mod audio_stream {
 
             //This is only needed for a particular mp3 stream it seems!
             //Just for this one https://18063.live.streamtheworld.com/977_CLASSROCK.mp3
-            let max_internal = 32768*4; //up to 128
+            let max_internal = 32768;
             if buf.len() > max_internal {
                 buf = &mut buf[..max_internal];
             }
