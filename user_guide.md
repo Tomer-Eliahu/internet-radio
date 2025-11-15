@@ -6,7 +6,7 @@ I took stations from [radio.net](https://www.radio.net/), but there are also alt
 [TuneIn](https://tunein.com/) (and I am sure there are more).
 
 Browse for your wanted station. Then on its webpage, right click -> click 'inspect' -> go to media.
-There you should see one or more items (there is more than one due to redirects). The one that grows in size as the station plays will have the final stream URL. Click on that and the station's stream URL will be listed under "Request URL" header.
+There you should see one or more items (there is more than one due to redirects). The one that grows in size as the station plays will have the final stream URL. Click on that and the station's stream URL will be listed under the "Request URL" header.
 
 Here is an example:
 <img src="media\Example_Station.png" />

@@ -43,7 +43,7 @@ We do however have 8MB of PSRAM available, so by changing LazyStatic uses to
 ```rust 
 std::LazyLock::new(|| Box::new(...))
 ```
-We make Rust reserve just 1 `usize` per such static in dram.bss.
+We make Rust reserve just 1 `usize` per such static in dram.bss. The `usize` then points to the allocation in PSRAM (this is lazily initialized).
 
 
 
